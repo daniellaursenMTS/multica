@@ -4,7 +4,8 @@ import { ApiError } from "@multica/core/api";
 import { renderWithI18n } from "../test/i18n";
 import { AppSidebar } from "./app-sidebar";
 
-const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
+const { agents, appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
+  agents: { current: [] as { id: string; name: string; archived_at: string | null }[] },
   appForeground: { current: true },
   sidebarState: { setOpenMobile: vi.fn() },
   chatSessions: { current: [] as { id?: string; unread_count?: number }[] },
@@ -12,7 +13,9 @@ const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, n
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   inboxItems: { current: [] as { id: string; read: boolean }[] },
-  navigation: { current: { pathname: "/acme/issues" } },
+  navigation: {
+    current: { pathname: "/acme/issues" } as { pathname: string; searchParams?: URLSearchParams },
+  },
   summary: { current: [] as { workspace_id: string; count: number }[] },
   workspaces: {
     current: [] as { id: string; name: string; slug: string; avatar_url: string | null }[],
@@ -99,7 +102,11 @@ vi.mock("../auth", () => ({ useLogout: () => vi.fn() }));
 vi.mock("../issues/components/status-icon", () => ({ StatusIcon: () => <span /> }));
 vi.mock("../navigation", () => ({
   AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a>,
-  useNavigation: () => ({ pathname: navigation.current.pathname, push: vi.fn() }),
+  useNavigation: () => ({
+    pathname: navigation.current.pathname,
+    searchParams: navigation.current.searchParams ?? new URLSearchParams(),
+    push: vi.fn(),
+  }),
 }));
 vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span /> }));
 vi.mock("../workspace/workspace-avatar", () => ({ WorkspaceAvatar: () => <span /> }));
@@ -138,6 +145,7 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     settings: () => "/acme/settings",
     issueDetail: (id: string) => `/acme/issues/${id}`,
     projectDetail: (id: string) => `/acme/projects/${id}`,
+    chatWithAgent: (id: string) => `/acme/chat?agent=${id}`,
   }),
 }));
 vi.mock("@multica/core/api", async (importOriginal) => {
@@ -175,6 +183,7 @@ vi.mock("@multica/core/workspace/queries", () => ({
   myInvitationListOptions: () => ({ queryKey: ["invitations"] }),
   workspaceKeys: { myInvitations: () => ["invitations"] },
   workspaceListOptions: () => ({ queryKey: ["workspaces"] }),
+  agentListOptions: (wsId: string) => ({ queryKey: ["agents", wsId] }),
 }));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
@@ -185,6 +194,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
     if (queryKey[0] === "inbox" && queryKey[1] === "unread-summary") return { data: summary.current };
     if (queryKey[0] === "inbox") return { data: inboxItems.current };
     if (queryKey[0] === "workspaces") return { data: workspaces.current };
+    if (queryKey[0] === "agents") return { data: agents.current };
     if (queryKey[0] === "chat" && queryKey[2] === "sessions") return { data: chatSessions.current };
     return { data: [] };
   },
@@ -482,5 +492,50 @@ describe("personal nav — Chat", () => {
     appForeground.current = false;
     const { container } = render(<AppSidebar />);
     expect(chatBadge(container)).toHaveAttribute("aria-label", "5");
+  });
+});
+
+describe("personal nav — Intake", () => {
+  const MRS = { id: "agent-intake", name: "Mrs.Intake", archived_at: null };
+  const intakeBtn = (c: HTMLElement) =>
+    c.querySelector('button[data-href="/acme/chat?agent=agent-intake"]');
+
+  beforeEach(() => {
+    agents.current = [];
+    navigation.current.pathname = "/acme/issues";
+    navigation.current.searchParams = new URLSearchParams();
+  });
+
+  it("links to the intake agent's chat when the agent exists", () => {
+    agents.current = [MRS];
+    const { container } = render(<AppSidebar />);
+    expect(intakeBtn(container)).not.toBeNull();
+  });
+
+  it("hides the item in a workspace with no intake agent", () => {
+    agents.current = [{ id: "other", name: "Web Researcher", archived_at: null }];
+    const { container } = render(<AppSidebar />);
+    expect(intakeBtn(container)).toBeNull();
+  });
+
+  it("ignores an archived intake agent", () => {
+    agents.current = [{ ...MRS, archived_at: "2026-01-01T00:00:00Z" }];
+    const { container } = render(<AppSidebar />);
+    expect(intakeBtn(container)).toBeNull();
+  });
+
+  it("is active only for its own agent on the chat route", () => {
+    agents.current = [MRS];
+    navigation.current.pathname = "/acme/chat";
+    navigation.current.searchParams = new URLSearchParams("agent=agent-intake");
+    const { container } = render(<AppSidebar />);
+    expect(intakeBtn(container)).toHaveAttribute("data-active", "true");
+  });
+
+  it("stays inactive on a plain chat route", () => {
+    agents.current = [MRS];
+    navigation.current.pathname = "/acme/chat";
+    const { container } = render(<AppSidebar />);
+    expect(intakeBtn(container)).not.toHaveAttribute("data-active");
   });
 });

@@ -19,6 +19,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from "@dnd-kit/utilities";
 import { Layers,
   ChevronDown,
+  ClipboardPlus,
   ChevronRight,
   LogOut,
   Plus,
@@ -64,7 +65,7 @@ import {
   useActiveIssueViewStore,
 } from "@multica/core/issue-views/active-view-store";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
-import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import { workspaceListOptions, myInvitationListOptions, workspaceKeys, agentListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inboxKeys, deduplicateInboxItems, inboxUnreadSummaryOptions, hasOtherWorkspaceUnread, unreadWorkspaceIds } from "@multica/core/inbox/queries";
@@ -144,6 +145,12 @@ type NavLabelKey =
 // Nav icons are NOT declared here: they are derived from each item's
 // destination path at render time, so the sidebar and the desktop tab bar
 // always agree. See route-icon-components.tsx.
+// The intake desk is a link to one agent's chat, not a route, so it cannot be a
+// NavKey (those must resolve to parameterless paths). It is resolved by agent
+// NAME rather than id so the same build works against any workspace — cloud or
+// self-hosted — and simply hides the item where no such agent exists.
+const INTAKE_AGENT_NAME = "Mrs.Intake";
+
 const personalNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "inbox", labelKey: "inbox" },
   { key: "myIssues", labelKey: "my_issues" },
@@ -431,7 +438,7 @@ interface AppSidebarProps {
 
 export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
   const { t } = useT("layout");
-  const { pathname, push } = useNavigation();
+  const { pathname, searchParams, push } = useNavigation();
   const user = useAuthStore((s) => s.user);
   const userId = useAuthStore((s) => s.user?.id);
   const logout = useLogout();
@@ -454,6 +461,19 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   }, [pathname, setOpenMobile]);
 
   const wsId = workspace?.id;
+  // Shared query — the agents page keeps this warm, so the sidebar reuses the
+  // cache rather than issuing a request of its own on every mount.
+  const { data: intakeAgents } = useQuery({
+    ...agentListOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+  const intakeAgent = React.useMemo(
+    () =>
+      intakeAgents?.find(
+        (a) => !a.archived_at && a.name === INTAKE_AGENT_NAME,
+      ),
+    [intakeAgents],
+  );
   const { data: inboxItems = EMPTY_INBOX } = useQuery({
     queryKey: wsId ? inboxKeys.list(wsId) : ["inbox", "disabled"],
     queryFn: () => api.listInbox(),
@@ -796,6 +816,26 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                     </SidebarMenuItem>
                   );
                 })}
+                {intakeAgent && (() => {
+                  const href = p.chatWithAgent(intakeAgent.id);
+                  // Chat is one route for every agent, so the pathname alone
+                  // cannot say which agent is open — the query param does.
+                  const isActive =
+                    pathname === p.chat() &&
+                    searchParams.get("agent") === intakeAgent.id;
+                  return (
+                    <SidebarMenuItem key="intake">
+                      <SidebarMenuButton
+                        isActive={isActive}
+                        render={<AppLink href={href} />}
+                        className={NAV_ITEM_CLASS_NAME}
+                      >
+                        <ClipboardPlus />
+                        <span>{t(($) => $.nav.intake)}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })()}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

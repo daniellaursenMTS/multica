@@ -79,6 +79,9 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   // page; `teams` is reserved for future team management.
   "issues",
   "projects",
+  "diamonds",
+  // Static route next to the workspace segment that serves the Diamonds page's diagrams.
+  "diamond-views",
   "autopilots",
   "agents",
   "squads",

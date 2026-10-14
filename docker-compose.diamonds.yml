@@ -1,0 +1,8 @@
+# Mounts the generated diamond views into the web container for the Diamonds page.
+# Add as the last -f file when building or starting the self-hosted stack.
+services:
+  frontend:
+    environment:
+      DIAMOND_VIEWS_DIR: /data/diamond-views
+    volumes:
+      - ${DIAMOND_VIEWS_HOST_DIR:-${HOME}/Documents/hermes/projects/_views}:/data/diamond-views:ro

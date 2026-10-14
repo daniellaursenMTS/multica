@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -59,7 +60,18 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // IssueCreateParams carries the already-validated, already-resolved inputs
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
+// IssueSubmission supplies a durable idempotency key and intake metadata. Only
+// trusted transport handlers may populate it; it is not part of the REST API.
+type IssueSubmission struct {
+	RequestID   pgtype.UUID
+	PayloadHash string
+	Metadata    map[string]json.RawMessage
+}
+
+var ErrSubmissionConflict = errors.New("request_id was already used with different content")
+
 type IssueCreateParams struct {
+	Submission    *IssueSubmission
 	WorkspaceID   pgtype.UUID
 	Title         string
 	Description   pgtype.Text
@@ -219,6 +231,30 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+	issueID := dbid.NewV7()
+	if p.Submission != nil {
+		if !p.Submission.RequestID.Valid || p.Submission.PayloadHash == "" || !p.CreatorID.Valid {
+			return IssueCreateResult{}, errors.New("invalid submission identity")
+		}
+		key := util.UUIDToString(p.WorkspaceID) + "/" + util.UUIDToString(p.CreatorID) + "/" + util.UUIDToString(p.Submission.RequestID)
+		issueID = pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte("multica:issue-submission/"+key)), Valid: true}
+		// Serializes simultaneous retries, including requests landing on different servers.
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("lock submission: %w", err)
+		}
+		existing, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: issueID, WorkspaceID: p.WorkspaceID})
+		if err == nil {
+			var metadata map[string]json.RawMessage
+			var hash string
+			if json.Unmarshal(existing.Metadata, &metadata) != nil || json.Unmarshal(metadata["intake_payload_sha256"], &hash) != nil || hash != p.Submission.PayloadHash || existing.CreatorID != p.CreatorID {
+				return IssueCreateResult{}, ErrSubmissionConflict
+			}
+			return IssueCreateResult{Issue: existing}, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return IssueCreateResult{}, fmt.Errorf("find submission: %w", err)
+		}
+	}
 
 	if p.SourceContext != nil {
 		if _, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
@@ -338,7 +374,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	var assignedTask db.AgentTaskQueue
 	if p.OriginType.Valid {
 		issue, err = qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
-			ID:            dbid.NewV7(),
+			ID:            issueID,
 			WorkspaceID:   p.WorkspaceID,
 			Title:         p.Title,
 			Description:   p.Description,
@@ -360,7 +396,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
-			ID:            dbid.NewV7(),
+			ID:            issueID,
 			WorkspaceID:   p.WorkspaceID,
 			Title:         p.Title,
 			Description:   p.Description,
@@ -381,6 +417,23 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
+	}
+
+	if p.Submission != nil {
+		metadata := make(map[string]json.RawMessage, len(p.Submission.Metadata)+1)
+		for key, value := range p.Submission.Metadata {
+			metadata[key] = value
+		}
+		metadata["intake_payload_sha256"], err = json.Marshal(p.Submission.PayloadHash)
+		if err != nil {
+			return IssueCreateResult{}, err
+		}
+		for key, value := range metadata {
+			issue, err = qtx.SetIssueMetadataKey(ctx, db.SetIssueMetadataKeyParams{ID: issue.ID, WorkspaceID: p.WorkspaceID, Key: key, Value: value})
+			if err != nil {
+				return IssueCreateResult{}, fmt.Errorf("set submission metadata: %w", err)
+			}
+		}
 	}
 
 	if p.SourceContext != nil {
@@ -465,6 +518,10 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		if err != nil {
 			return IssueCreateResult{}, fmt.Errorf("create deferred channel issue task: %w", err)
 		}
+	}
+
+	if p.Submission != nil && !assignedTask.ID.Valid {
+		return IssueCreateResult{}, errors.New("submission requires a runnable agent and a durable task")
 	}
 
 	if err := tx.Commit(ctx); err != nil {

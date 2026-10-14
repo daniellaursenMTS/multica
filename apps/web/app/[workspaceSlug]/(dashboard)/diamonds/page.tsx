@@ -59,14 +59,16 @@ export default function Page() {
 
   if (error) {
     return (
-      <div className="p-6">
+      <div className="h-full overflow-y-auto p-6">
         <h1 className="text-lg font-semibold">Diamonds</h1>
         <p className="mt-2 text-sm text-muted-foreground">{error}</p>
       </div>
     );
   }
 
+  // The dashboard shell has a fixed height; like every other page, this one owns its scroll.
   return (
+    <div className="h-full min-h-0 flex-1 overflow-y-auto">
     <div className="flex flex-col gap-6 p-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
@@ -138,6 +140,7 @@ export default function Page() {
           {new Date(index.generated_at).toLocaleString("da-DK")}.
         </p>
       )}
+    </div>
     </div>
   );
 }

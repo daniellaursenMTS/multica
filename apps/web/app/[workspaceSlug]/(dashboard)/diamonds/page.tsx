@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAuthStore } from "@multica/core/auth";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { agentListOptions } from "@multica/core/workspace/queries";
+import { AppLink } from "@multica/views/navigation";
+import { useQuery } from "@tanstack/react-query";
 
 type RoleCode = "bo" | "po" | "plo" | "to";
 interface Index {
@@ -13,6 +17,8 @@ interface Index {
 }
 
 const ROLE = { bo: "BO", po: "PO", plo: "PLO", to: "TO" } as const;
+// Resolved by name, like the sidebar's intake desk, so the same build works in any workspace.
+const PROJECT_CHAT_AGENT_NAME = "Projekt-chat";
 
 function useText(url: string | null) {
   const [text, setText] = useState<string | null>(null);
@@ -47,6 +53,10 @@ function Diagram({ url, label }: { url: string | null; label: string }) {
 
 export default function Page() {
   const email = useAuthStore((s) => s.user?.email ?? null);
+  const workspace = useCurrentWorkspace();
+  const p = useWorkspacePaths();
+  const { data: agents } = useQuery({ ...agentListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });
+  const chatAgent = agents?.find((a) => !a.archived_at && a.name === PROJECT_CHAT_AGENT_NAME);
   const { text: indexText, error } = useText("/diamond-views/index.json");
   const index = useMemo<Index | null>(() => (indexText ? (JSON.parse(indexText) as Index) : null), [indexText]);
 
@@ -132,6 +142,15 @@ export default function Page() {
           })}
         </div>
         <Diagram url={shown ? `/diamond-views/${shown}.svg` : null} label="diamant" />
+        {chatAgent && (
+          <p className="text-sm text-muted-foreground">
+            Forstår du ikke noget i projektet?{" "}
+            <AppLink href={p.chatWithAgent(chatAgent.id)} className="font-medium text-foreground underline underline-offset-4">
+              Spørg Projekt-chat
+            </AppLink>{" "}
+            — den forklarer hubben i din rolles sprog, med kilder.
+          </p>
+        )}
       </section>
 
       {index && (

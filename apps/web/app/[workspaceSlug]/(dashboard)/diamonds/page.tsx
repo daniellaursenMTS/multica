@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@multica/core/auth";
+import { api } from "@multica/core/api";
+import type { Issue } from "@multica/core/types";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { AppLink } from "@multica/views/navigation";
@@ -33,6 +35,7 @@ interface Row {
   demo?: boolean;
   notes?: number;
   diamond?: Record<RoleCode, { person: string | null; state: string; text: string }>;
+  multica_project?: string | null;
 }
 interface Portfolio { synced_at: string | null; as_of: string; rows: Row[] }
 interface Index {
@@ -172,7 +175,71 @@ function Overview({ rows, open }: { rows: Row[]; open: (id: string) => void }) {
   );
 }
 
-function Detail({ row, back, chatHref }: { row: Row; back: () => void; chatHref: string | null }) {
+
+const ISSUE_STATUS_COLOR: Record<string, string> = {
+  backlog: "#87909e", todo: "#87909e", in_progress: "#1090e0", in_review: "#5f55ee", done: "#2f9e44", blocked: "#d33d44", cancelled: "#adb5bd",
+};
+const ago = (iso: string) => {
+  const d = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  return d <= 0 ? "i dag" : d === 1 ? "i går" : `${d} dage siden`;
+};
+
+/** Every issue in the project, live from Multica — newest activity first. Opus notes, agent tasks
+ *  and anything created from the project all land here, so this is the project's history. */
+function History({ projectId, agentName }: { projectId: string; agentName: (id: string | null) => string }) {
+  const p = useWorkspacePaths();
+  const me = useAuthStore((s) => s.user?.id ?? null);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["portfolio", "project-issues", projectId],
+    queryFn: async () => {
+      const all: Issue[] = [];
+      for (let offset = 0; offset < 500; offset += 100) {
+        const res = await api.listIssues({ project_id: projectId, limit: 100, offset });
+        all.push(...res.issues);
+        if (res.issues.length < 100 || all.length >= res.total) break;
+      }
+      return all.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    },
+  });
+  const [all, setAll] = useState(false);
+  if (isLoading) return <div className="h-24 animate-pulse rounded-lg bg-muted" aria-label="Henter historik" />;
+  if (error) return <p className="text-sm text-muted-foreground">Kunne ikke hente projektets issues.</p>;
+  const issues = data ?? [];
+  if (!issues.length) return <p className="text-sm text-muted-foreground">Ingen issues i projektet endnu.</p>;
+  const counts = issues.reduce<Record<string, number>>((m, i) => ((m[i.status] = (m[i.status] ?? 0) + 1), m), {});
+  const shown = all ? issues : issues.slice(0, 15);
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">
+        {issues.length} issues · {Object.entries(counts).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(" · ")}
+      </p>
+      <ol className="divide-y rounded-lg border">
+        {shown.map((i) => (
+          <li key={i.id} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3 py-2 text-sm">
+            <span className="size-2 rounded-full" style={{ background: ISSUE_STATUS_COLOR[i.status] ?? "#87909e" }} title={i.status_name ?? i.status} />
+            <div className="min-w-0">
+              <AppLink href={p.issueDetail(i.id)} className="block truncate font-medium hover:underline">
+                <span className="mr-2 font-mono text-xs text-muted-foreground">{i.identifier}</span>{i.title}
+              </AppLink>
+              <span className="text-xs text-muted-foreground">
+                {i.status_name ?? i.status.replace("_", " ")}
+                {i.assignee_id && ` · ${i.assignee_type === "agent" ? agentName(i.assignee_id) : i.assignee_id === me ? "dig" : "medlem"}`}
+              </span>
+            </div>
+            <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{i.updated_at ? ago(i.updated_at) : ""}</span>
+          </li>
+        ))}
+      </ol>
+      {issues.length > 15 && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="self-start text-sm text-muted-foreground hover:text-foreground">
+          {all ? "Vis færre" : `Vis alle ${issues.length}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Detail({ row, back, chatHref, agentName }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string }) {
   return (
     <div className="flex flex-col gap-6">
       <button type="button" onClick={back} className="self-start text-sm text-muted-foreground hover:text-foreground">← Alle projekter</button>
@@ -229,6 +296,17 @@ function Detail({ row, back, chatHref }: { row: Row; back: () => void; chatHref:
         </p>
       )}
 
+      <section className="flex flex-col gap-2" aria-labelledby="hist">
+        <h3 id="hist" className="text-sm font-medium">Historik</h3>
+        {row.multica_project ? (
+          <History projectId={row.multica_project} agentName={agentName} />
+        ) : (
+          <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
+            Projektet findes kun i ClickUp endnu, så der er ingen Multica-historik. Når det flyttes til Multica, samles dets issues her.
+          </p>
+        )}
+      </section>
+
       <section aria-labelledby="flds">
         <h3 id="flds" className="mb-2 text-sm font-medium">Felter</h3>
         <dl className="divide-y rounded-lg border text-sm">
@@ -253,6 +331,7 @@ function PortfolioPage() {
   const { data: agents } = useQuery({ ...agentListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });
   const chatAgent = agents?.find((a) => !a.archived_at && a.name === PROJECT_CHAT_AGENT_NAME);
   const chatHref = chatAgent ? p.chatWithAgent(chatAgent.id) : null;
+  const agentName = (id: string | null) => agents?.find((a) => a.id === id)?.name ?? "agent";
 
   const { text: pfText, error } = useText("/diamond-views/portfolio.json");
   const { text: idxText } = useText("/diamond-views/index.json");
@@ -297,7 +376,7 @@ function PortfolioPage() {
         {!pf && !error && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter portfolio" />}
 
         {pf && tab === "overview" && !row && <Overview rows={pf.rows} open={(id) => setParams({ project: id })} />}
-        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} />}
+        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} />}
 
         {tab === "mine" && index && (
           <section className="flex flex-col gap-3">

@@ -4,11 +4,12 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
-import type { Issue } from "@multica/core/types";
+import type { Agent, Issue } from "@multica/core/types";
+import { issueKeys } from "@multica/core/issues/queries";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { AppLink } from "@multica/views/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 // Portfolio: the ClickUp intake list and the Opus hub projects in one overview, grouped by
 // status like ClickUp. A project with a hub also shows its role diamond and links to the chat.
@@ -239,7 +240,97 @@ function History({ projectId, agentName }: { projectId: string; agentName: (id: 
   );
 }
 
-function Detail({ row, back, chatHref, agentName }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string }) {
+/** Create an issue in the project and hand it to an agent. It lands in the history below at once. */
+function NewTask({ projectId, projectName, agents }: { projectId: string; projectName: string; agents: Agent[] }) {
+  const workspace = useCurrentWorkspace();
+  const p = useWorkspacePaths();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [startNow, setStartNow] = useState(true);
+  const [created, setCreated] = useState<Issue | null>(null);
+  const choosable = agents.filter((a) => !a.archived_at).sort((a, b) => a.name.localeCompare(b.name, "da"));
+  const agent = choosable.find((a) => a.id === agentId);
+  const create = useMutation({
+    mutationFn: () =>
+      api.createIssue({
+        title: title.trim(),
+        description: description.trim() || undefined,
+        project_id: projectId,
+        status: agentId && startNow ? "todo" : "backlog",
+        ...(agentId ? { assignee_type: "agent" as const, assignee_id: agentId } : {}),
+      }),
+    onSuccess: (issue) => {
+      setCreated(issue);
+      setTitle("");
+      setDescription("");
+      qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", projectId] });
+      if (workspace?.id) qc.invalidateQueries({ queryKey: issueKeys.all(workspace.id) });
+    },
+  });
+
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={() => { setOpen(true); setCreated(null); }}
+          className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">+ Ny opgave</button>
+        {created && (
+          <span className="text-sm text-muted-foreground">
+            Oprettet:{" "}
+            <AppLink href={p.issueDetail(created.id)} className="font-medium text-foreground underline underline-offset-4">
+              {created.identifier} {created.title}
+            </AppLink>
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <form
+      className="flex flex-col gap-3 rounded-lg border p-4"
+      onSubmit={(e) => { e.preventDefault(); if (title.trim()) create.mutate(undefined, { onSuccess: () => setOpen(false) }); }}
+    >
+      <div className="text-sm font-medium">Ny opgave i {projectName}</div>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted-foreground">Titel</span>
+        <input id="portfolio-task-title" required value={title} onChange={(e) => setTitle(e.target.value)}
+          className="rounded-md border bg-background px-2 py-1.5" placeholder="Hvad skal der gøres?" autoFocus />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted-foreground">Beskrivelse</span>
+        <textarea id="portfolio-task-description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
+          className="rounded-md border bg-background px-2 py-1.5" placeholder="Baggrund, hvad er færdigt, hvad skal undgås …" />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted-foreground">Agent</span>
+        <select id="portfolio-task-agent" value={agentId} onChange={(e) => setAgentId(e.target.value)} className="rounded-md border bg-background px-2 py-1.5">
+          <option value="">Ingen — gem kun opgaven</option>
+          {choosable.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        {agent?.description && <span className="text-xs text-muted-foreground">{agent.description}</span>}
+      </label>
+      {agentId && (
+        <label className="flex items-center gap-2 text-sm">
+          <input id="portfolio-task-start" type="checkbox" checked={startNow} onChange={(e) => setStartNow(e.target.checked)} />
+          Start agenten nu
+          <span className="text-xs text-muted-foreground">— ellers parkeres den i backlog, til du flytter den til todo</span>
+        </label>
+      )}
+      {create.error && <p className="text-sm text-[#CF022D]">Kunne ikke oprette opgaven: {(create.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={!title.trim() || create.isPending}
+          className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
+          {create.isPending ? "Opretter …" : agentId && startNow ? `Opret og start ${agent?.name ?? "agent"}` : "Opret opgave"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
+      </div>
+    </form>
+  );
+}
+
+function Detail({ row, back, chatHref, agentName, agents }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string; agents: Agent[] }) {
   return (
     <div className="flex flex-col gap-6">
       <button type="button" onClick={back} className="self-start text-sm text-muted-foreground hover:text-foreground">← Alle projekter</button>
@@ -299,7 +390,10 @@ function Detail({ row, back, chatHref, agentName }: { row: Row; back: () => void
       <section className="flex flex-col gap-2" aria-labelledby="hist">
         <h3 id="hist" className="text-sm font-medium">Historik</h3>
         {row.multica_project ? (
-          <History projectId={row.multica_project} agentName={agentName} />
+          <>
+            <NewTask projectId={row.multica_project} projectName={row.name} agents={agents} />
+            <History projectId={row.multica_project} agentName={agentName} />
+          </>
         ) : (
           <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
             Projektet findes kun i ClickUp endnu, så der er ingen Multica-historik. Når det flyttes til Multica, samles dets issues her.
@@ -376,7 +470,7 @@ function PortfolioPage() {
         {!pf && !error && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter portfolio" />}
 
         {pf && tab === "overview" && !row && <Overview rows={pf.rows} open={(id) => setParams({ project: id })} />}
-        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} />}
+        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} agents={agents ?? []} />}
 
         {tab === "mine" && index && (
           <section className="flex flex-col gap-3">

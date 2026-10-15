@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
-import type { Agent, Issue } from "@multica/core/types";
+import type { Agent, Issue, IssueMetadata, IssueMetadataValue, Project, ProjectStatus } from "@multica/core/types";
 import { issueKeys } from "@multica/core/issues/queries";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 type RoleCode = "bo" | "po" | "plo" | "to";
 interface Row {
-  source: "clickup" | "hub";
+  source: "clickup" | "hub" | "multica";
   id: string;
   name: string;
   url: string | null;
@@ -37,6 +37,8 @@ interface Row {
   notes?: number;
   diamond?: Record<RoleCode, { person: string | null; state: string; text: string }>;
   multica_project?: string | null;
+  intake_issue?: string | null;
+  intake_meta?: IssueMetadata;
 }
 interface Portfolio { synced_at: string | null; as_of: string; rows: Row[] }
 interface Index {
@@ -92,6 +94,163 @@ function Diagram({ url, label }: { url: string; label: string }) {
 const show = (v: unknown) =>
   v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0) ? "—" : Array.isArray(v) ? v.join(", ") : String(v);
 const date = (d: string | null) => (d ? new Date(d).toLocaleDateString("da-DK", { day: "numeric", month: "short", year: "numeric" }) : "—");
+
+// ---- Project fields kept in Multica (step 3) -------------------------------------------------
+// A project's intake fields live as metadata on one "intake issue" in the project (pf_intake).
+// Only what people enter is stored; CV/SW/TS/WOF are computed here exactly as ClickUp does.
+const PF_STATUSES = ["open", "in progress", "review", "stopped", "closed"] as const;
+const PF_TO_PROJECT: Record<string, ProjectStatus> = {
+  open: "planned", "in progress": "in_progress", review: "in_progress", stopped: "paused", closed: "completed",
+};
+const PROJECT_TO_PF: Record<string, string> = { planned: "open", in_progress: "in progress", paused: "stopped", completed: "closed", cancelled: "closed" };
+const SCALE = { tshirt_size: ["1 · Triviel (< 1 dag)", "2 · Lille", "3 · Mellem", "4 · Stor (uger)", "5 · Meget stor"],
+  smarter_work: ["1", "2", "3", "4", "5 · Fjerner manuelt arbejde helt"], commercial_value: ["1", "2", "3", "4", "5 · Høj forretningsværdi"],
+  urgency: ["1 · Kan vente", "2", "3", "4", "5 · Haster"] } as const;
+type PfForm = {
+  name: string; description: string; status: string; priority: string; start_date: string; due_date: string;
+  tshirt_size: string; smarter_work: string; commercial_value: string; urgency: string; team: string;
+  activation_channel: string; manual_handling_time: string; saved_time: string; trigger_type: string; success_metrics: string;
+};
+const META_KEYS: (keyof PfForm)[] = ["tshirt_size", "smarter_work", "commercial_value", "urgency", "team",
+  "activation_channel", "manual_handling_time", "saved_time", "trigger_type", "success_metrics"];
+const NUMERIC = new Set(["tshirt_size", "smarter_work", "commercial_value", "urgency", "manual_handling_time", "saved_time"]);
+
+function fieldsFromMeta(m: IssueMetadata | undefined): Record<string, unknown> {
+  if (!m) return {};
+  const n = (k: string) => (typeof m[`pf_${k}`] === "number" ? (m[`pf_${k}`] as number) : m[`pf_${k}`] ? Number(m[`pf_${k}`]) : null);
+  const list = (k: string) => (m[`pf_${k}`] ? String(m[`pf_${k}`]).split(",").map((x) => x.trim()).filter(Boolean) : null);
+  const ts = n("tshirt_size"), sw = n("smarter_work"), cv = n("commercial_value"), u = n("urgency");
+  const tsScore = ts ? 6 - ts : null;
+  return {
+    tshirt_size: ts, smarter_work: sw, commercial_value: cv, urgency: u,
+    ts: tsScore, sw, cv, wof: tsScore && sw && cv && u ? cv + tsScore + sw + u : null,
+    team: list("team"), activation_channel: list("activation_channel"), manual_handling_time: n("manual_handling_time"),
+    saved_time: n("saved_time"), trigger_type: list("trigger_type"), success_metrics: list("success_metrics"),
+  };
+}
+
+function emptyForm(row?: Row | null, project?: Project | null): PfForm {
+  const m = row?.intake_meta ?? {};
+  const g = (k: string) => (m[`pf_${k}`] === undefined ? "" : String(m[`pf_${k}`]));
+  return {
+    name: project?.title ?? row?.name ?? "", description: project?.description ?? row?.description ?? "",
+    status: g("status") || row?.status || "open", priority: project?.priority && project.priority !== "none" ? project.priority : "",
+    start_date: (project?.start_date ?? row?.start_date ?? "")?.slice(0, 10) ?? "", due_date: (project?.due_date ?? row?.due_date ?? "")?.slice(0, 10) ?? "",
+    tshirt_size: g("tshirt_size"), smarter_work: g("smarter_work"), commercial_value: g("commercial_value"), urgency: g("urgency"),
+    team: g("team") || ((row?.fields.team as string[] | undefined) ?? []).join(", "), activation_channel: g("activation_channel"),
+    manual_handling_time: g("manual_handling_time"), saved_time: g("saved_time"), trigger_type: g("trigger_type"), success_metrics: g("success_metrics"),
+  };
+}
+
+/** Create or edit a project's Portfolio fields. Creating makes a Multica project plus its intake issue;
+ *  editing an existing hub project without one adds the intake issue. */
+function ProjectForm({ mode, row, project, onDone, onCancel }: {
+  mode: "create" | "edit"; row?: Row | null; project?: Project | null; onDone: (projectId: string) => void; onCancel: () => void;
+}) {
+  const me = useAuthStore((s) => s.user?.id ?? null);
+  const qc = useQueryClient();
+  const [f, setF] = useState<PfForm>(() => emptyForm(row, project));
+  const set = (k: keyof PfForm) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const editsProject = mode === "create" || row?.source === "multica";
+  const save = useMutation({
+    mutationFn: async () => {
+      let projectId = row?.multica_project ?? project?.id ?? null;
+      const projectData = {
+        title: f.name.trim(), description: f.description.trim() || undefined, status: PF_TO_PROJECT[f.status] ?? "planned",
+        priority: (f.priority || "none") as Project["priority"], start_date: f.start_date || undefined, due_date: f.due_date || undefined,
+      };
+      if (!projectId) {
+        projectId = (await api.createProject({ ...projectData, ...(me ? { lead_type: "member" as const, lead_id: me } : {}) })).id;
+      } else if (editsProject) {
+        await api.updateProject(projectId, { ...projectData, start_date: f.start_date || null, due_date: f.due_date || null });
+      }
+      let intake = row?.intake_issue ?? null;
+      if (!intake) {
+        intake = (await api.createIssue({ title: `Intake — ${f.name.trim()}`, project_id: projectId, status: "done",
+          description: "Portfolio-felter for projektet. Felterne ligger som metadata (pf_*) og redigeres fra Portfolio." })).id;
+        await api.setIssueMetadataKey(intake, "pf_intake", true);
+      }
+      await api.setIssueMetadataKey(intake, "pf_status", f.status);
+      const old = row?.intake_meta ?? {};
+      for (const k of META_KEYS) {
+        const v = f[k].trim();
+        const key = `pf_${k}`;
+        if (!v) { if (old[key] !== undefined) await api.deleteIssueMetadataKey(intake, key); continue; }
+        const value: IssueMetadataValue = NUMERIC.has(k) ? Number(v.replace(",", ".")) : v;
+        if (old[key] !== value) await api.setIssueMetadataKey(intake, key, value);
+      }
+      return projectId;
+    },
+    onSuccess: (projectId) => {
+      qc.invalidateQueries({ queryKey: ["portfolio"] });
+      onDone(projectId);
+    },
+  });
+  const input = "rounded-md border bg-background px-2 py-1.5";
+  const scale = (k: keyof typeof SCALE, label: string) => (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <select id={`pf-${k}`} value={f[k]} onChange={set(k)} className={input}>
+        <option value="">—</option>
+        {SCALE[k].map((t, i) => <option key={i} value={String(i + 1)}>{t}</option>)}
+      </select>
+    </label>
+  );
+  const preview = fieldsFromMeta(Object.fromEntries(META_KEYS.filter((k) => f[k]).map((k) => [`pf_${k}`, NUMERIC.has(k) ? Number(f[k]) : f[k]])));
+  return (
+    <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (f.name.trim()) save.mutate(); }}>
+      <div className="text-sm font-medium">{mode === "create" ? "Nyt projekt" : row?.intake_issue ? "Rediger felter" : "Tilføj felter"}</div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span className="text-muted-foreground">Navn</span>
+          <input id="pf-name" required value={f.name} onChange={set("name")} disabled={!editsProject} className={input} autoFocus={mode === "create"} />
+        </label>
+        <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span className="text-muted-foreground">Beskrivelse</span>
+          <textarea id="pf-description" rows={3} value={f.description} onChange={set("description")} disabled={!editsProject} className={input} />
+        </label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Status</span>
+          <select id="pf-status" value={f.status} onChange={set("status")} className={input}>{PF_STATUSES.map((x) => <option key={x}>{x}</option>)}</select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Priority</span>
+          <select id="pf-priority" value={f.priority} onChange={set("priority")} disabled={!editsProject} className={input}>
+            <option value="">—</option>{["urgent", "high", "medium", "low"].map((x) => <option key={x}>{x}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Start</span>
+          <input id="pf-start" type="date" value={f.start_date} onChange={set("start_date")} disabled={!editsProject} className={input} /></label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Due date</span>
+          <input id="pf-due" type="date" value={f.due_date} onChange={set("due_date")} disabled={!editsProject} className={input} /></label>
+        {scale("tshirt_size", "T-shirt Size")}{scale("smarter_work", "Smarter Work")}
+        {scale("commercial_value", "Commercial Value")}{scale("urgency", "Urgency")}
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Team (komma-separeret)</span>
+          <input id="pf-team" value={f.team} onChange={set("team")} className={input} placeholder="Group Digital, Legal" /></label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Activation channel / Connector</span>
+          <input id="pf-activation" value={f.activation_channel} onChange={set("activation_channel")} className={input} /></label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Manual handling time (timer)</span>
+          <input id="pf-manual" inputMode="decimal" value={f.manual_handling_time} onChange={set("manual_handling_time")} className={input} /></label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Saved time per workflow (timer)</span>
+          <input id="pf-saved" inputMode="decimal" value={f.saved_time} onChange={set("saved_time")} className={input} /></label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Trigger type</span>
+          <input id="pf-trigger" value={f.trigger_type} onChange={set("trigger_type")} className={input} /></label>
+        <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Success metrics</span>
+          <input id="pf-success" value={f.success_metrics} onChange={set("success_metrics")} className={input} /></label>
+      </div>
+      <p className="text-xs text-muted-foreground tabular-nums">
+        Scorer: 💡 WOF {show(preview.wof)} = CV {show(preview.cv)} + TS {show(preview.ts)} + SW {show(preview.sw)} + Urgency {show(preview.urgency)}
+        {!editsProject && " · Navn, beskrivelse, prioritet og datoer ændres på projektets egen side i Multica."}
+      </p>
+      {save.error && <p className="text-sm text-[#CF022D]">Kunne ikke gemme: {(save.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={!f.name.trim() || save.isPending}
+          className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
+          {save.isPending ? "Gemmer …" : mode === "create" ? "Opret projekt" : "Gem felter"}
+        </button>
+        <button type="button" onClick={onCancel} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
+      </div>
+    </form>
+  );
+}
 
 function StatusPill({ status, color }: { status: string; color?: string }) {
   return (
@@ -330,7 +489,8 @@ function NewTask({ projectId, projectName, agents }: { projectId: string; projec
   );
 }
 
-function Detail({ row, back, chatHref, agentName, agents }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string; agents: Agent[] }) {
+function Detail({ row, back, chatHref, agentName, agents, project }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null }) {
+  const [editing, setEditing] = useState(false);
   return (
     <div className="flex flex-col gap-6">
       <button type="button" onClick={back} className="self-start text-sm text-muted-foreground hover:text-foreground">← Alle projekter</button>
@@ -402,7 +562,22 @@ function Detail({ row, back, chatHref, agentName, agents }: { row: Row; back: ()
       </section>
 
       <section aria-labelledby="flds">
-        <h3 id="flds" className="mb-2 text-sm font-medium">Felter</h3>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3 id="flds" className="text-sm font-medium">Felter</h3>
+          {row.multica_project && !editing && (
+            <button type="button" onClick={() => setEditing(true)} className="rounded-md border px-3 py-1 text-sm hover:bg-accent">
+              {row.intake_issue ? "Rediger felter" : "Tilføj felter"}
+            </button>
+          )}
+        </div>
+        {editing && (
+          <div className="mb-3">
+            <ProjectForm mode="edit" row={row} project={project} onCancel={() => setEditing(false)} onDone={() => setEditing(false)} />
+          </div>
+        )}
+        {row.source === "clickup" && (
+          <p className="mb-2 text-xs text-muted-foreground">Felterne kommer fra ClickUp og redigeres der, indtil projektet flyttes til Multica.</p>
+        )}
         <dl className="divide-y rounded-lg border text-sm">
           {FIELD_ROWS.map(([k, label]) => (
             <div key={k} className="grid grid-cols-[minmax(0,16rem)_1fr] gap-4 px-3 py-2">
@@ -440,10 +615,52 @@ function PortfolioPage() {
     router.push(`?${q.toString()}`);
   };
 
+  // Live from Multica: projects created in Portfolio (they carry an intake issue) and the intake
+  // fields of hub projects. Generated rows (ClickUp, hubs) are the base; live data is merged in.
+  const { data: live } = useQuery({
+    queryKey: ["portfolio", "live", workspace?.id],
+    enabled: !!workspace?.id,
+    queryFn: async () => {
+      const [projects, intakes] = await Promise.all([
+        api.listProjects(),
+        api.listIssues({ metadata: { pf_intake: true }, limit: 200 }),
+      ]);
+      return { projects: projects.projects, intakes: intakes.issues };
+    },
+  });
+  const rows = useMemo<Row[]>(() => {
+    if (!pf) return [];
+    const intakeBy = new Map((live?.intakes ?? []).filter((i) => i.project_id).map((i) => [i.project_id as string, i]));
+    const known = new Set(pf.rows.map((r) => r.multica_project).filter(Boolean) as string[]);
+    const merged = pf.rows.map((r) => {
+      const intake = r.multica_project ? intakeBy.get(r.multica_project) : undefined;
+      if (!intake) return r;
+      const extra = fieldsFromMeta(intake.metadata);
+      return { ...r, intake_issue: intake.id, intake_meta: intake.metadata,
+        status: (intake.metadata.pf_status as string) || r.status,
+        fields: { ...r.fields, ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== null)) } };
+    });
+    for (const pr of live?.projects ?? []) {
+      const intake = intakeBy.get(pr.id);
+      if (!intake || known.has(pr.id)) continue;
+      merged.push({
+        source: "multica", id: pr.id, name: pr.title, url: null,
+        status: (intake.metadata.pf_status as string) || PROJECT_TO_PF[pr.status] || "open",
+        assignees: [], priority: pr.priority === "none" ? null : pr.priority,
+        start_date: pr.start_date?.slice(0, 10) ?? null, due_date: pr.due_date?.slice(0, 10) ?? null,
+        updated: pr.updated_at, description: pr.description ?? "", subtasks: 0,
+        fields: fieldsFromMeta(intake.metadata), multica_project: pr.id, intake_issue: intake.id, intake_meta: intake.metadata,
+      });
+    }
+    return merged.filter((r) => r.status !== "closed");
+  }, [pf, live]);
+  const [creating, setCreating] = useState(false);
+
   const me = index && email ? index.accounts[email.toLowerCase()] ?? null : null;
   const [person, setPerson] = useState<string | null>(null);
   const current = index?.people.find((x) => x.name === (person ?? me)) ?? index?.people[0] ?? null;
-  const row = pf?.rows.find((r) => r.id === selected) ?? null;
+  const row = rows.find((r) => r.id === selected) ?? null;
+  const rowProject = live?.projects.find((x) => x.id === row?.multica_project) ?? null;
 
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
@@ -469,8 +686,20 @@ function PortfolioPage() {
         {error && <p className="text-sm text-muted-foreground">{error}</p>}
         {!pf && !error && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter portfolio" />}
 
-        {pf && tab === "overview" && !row && <Overview rows={pf.rows} open={(id) => setParams({ project: id })} />}
-        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} agents={agents ?? []} />}
+        {pf && tab === "overview" && !row && (
+          <>
+            {creating ? (
+              <ProjectForm mode="create" onCancel={() => setCreating(false)}
+                onDone={(id) => { setCreating(false); setParams({ project: id }); }} />
+            ) : (
+              <button type="button" onClick={() => setCreating(true)} className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+                + Nyt projekt
+              </button>
+            )}
+            <Overview rows={rows} open={(id) => setParams({ project: id })} />
+          </>
+        )}
+        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} agents={agents ?? []} project={rowProject} />}
 
         {tab === "mine" && index && (
           <section className="flex flex-col gap-3">

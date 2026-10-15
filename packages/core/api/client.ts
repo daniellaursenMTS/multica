@@ -1,3 +1,4 @@
+import { NotificationScheduleResponseSchema, type NotificationScheduleInput, type NotificationScheduleResponse } from "../notification-preferences/schedule";
 import { configStore } from "../config";
 import type {
   Issue,
@@ -221,6 +222,8 @@ import type {
   CreateCommentSubIssueManualRequest,
   CreateCommentSubIssueAgentRequest,
   CreateCommentSubIssueRequest,
+  IssueMetadata,
+  IssueMetadataValue,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -1202,6 +1205,23 @@ export class ApiClient {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  /** Flat key-value metadata on an issue (`GET /api/issues/:id/metadata`). */
+  async listIssueMetadata(id: string): Promise<{ metadata: IssueMetadata }> {
+    return this.fetch(`/api/issues/${id}/metadata`);
+  }
+
+  /** Set one metadata key. Values are primitives only; remove a key with deleteIssueMetadataKey. */
+  async setIssueMetadataKey(id: string, key: string, value: IssueMetadataValue): Promise<unknown> {
+    return this.fetch(`/api/issues/${id}/metadata/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    });
+  }
+
+  async deleteIssueMetadataKey(id: string, key: string): Promise<unknown> {
+    return this.fetch(`/api/issues/${id}/metadata/${encodeURIComponent(key)}`, { method: "DELETE" });
   }
 
   async moveIssue(id: string, data: MoveIssueRequest): Promise<Issue> {
@@ -2533,6 +2553,20 @@ export class ApiClient {
       EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
       { endpoint: "PATCH /api/notification-preferences" },
     );
+  }
+
+  async getNotificationSchedule(workspaceSlug: string): Promise<NotificationScheduleResponse> {
+    const raw = await this.fetch<unknown>("/api/notification-schedule", { headers: workspaceHeader(workspaceSlug) });
+    const parsed = parseWithFallback<NotificationScheduleResponse | null>(raw, NotificationScheduleResponseSchema, null, { endpoint: "GET /api/notification-schedule" });
+    if (!parsed) throw new Error("Could not read the notification schedule.");
+    return parsed;
+  }
+
+  async updateNotificationSchedule(input: NotificationScheduleInput, workspaceSlug: string): Promise<NotificationScheduleResponse> {
+    const raw = await this.fetch<unknown>("/api/notification-schedule", { method: "PATCH", headers: workspaceHeader(workspaceSlug), body: JSON.stringify(input) });
+    const parsed = parseWithFallback<NotificationScheduleResponse | null>(raw, NotificationScheduleResponseSchema, null, { endpoint: "PATCH /api/notification-schedule" });
+    if (!parsed || !parsed.schedule) throw new Error("The server did not confirm the notification schedule.");
+    return parsed;
   }
 
   // App Config

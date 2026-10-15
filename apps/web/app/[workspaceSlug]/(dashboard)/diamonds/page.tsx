@@ -489,7 +489,68 @@ function NewTask({ projectId, projectName, agents }: { projectId: string; projec
   );
 }
 
-function Detail({ row, back, chatHref, agentName, agents, project }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null }) {
+/** Copy a ClickUp project into Multica: project + intake issue from its fields. ClickUp is only
+ *  read — nothing is written back. Afterwards the Multica project replaces the ClickUp row. */
+function MoveToMultica({ row, onMoved }: { row: Row; onMoved: (projectId: string) => void }) {
+  const me = useAuthStore((s) => s.user?.id ?? null);
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const move = useMutation({
+    mutationFn: async () => {
+      const f = row.fields;
+      const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number(v));
+      const list = (v: unknown) => (Array.isArray(v) ? v.join(", ") : v ? String(v) : "");
+      const priority = ({ urgent: "urgent", high: "high", normal: "medium", low: "low" } as const)[row.priority as "urgent" | "high" | "normal" | "low"] ?? "none";
+      const project = await api.createProject({
+        title: row.name, description: row.description || undefined, status: PF_TO_PROJECT[row.status] ?? "planned", priority,
+        start_date: row.start_date ?? undefined, due_date: row.due_date ?? undefined,
+        ...(me ? { lead_type: "member" as const, lead_id: me } : {}),
+      });
+      const intake = await api.createIssue({
+        title: `Intake — ${row.name}`, project_id: project.id, status: "done",
+        description: `Flyttet fra ClickUp ${new Date().toLocaleDateString("da-DK")}: ${row.url ?? row.id}\n\nPortfolio-felter ligger som metadata (pf_*). ClickUp er ikke ændret.`,
+      });
+      const meta: Record<string, IssueMetadataValue | null> = {
+        pf_intake: true, pf_status: row.status, pf_clickup_id: row.id, pf_clickup_url: row.url ?? "",
+        pf_tshirt_size: num(f.tshirt_size), pf_smarter_work: num(f.smarter_work), pf_commercial_value: num(f.commercial_value),
+        pf_urgency: num(f.urgency), pf_team: list(f.team), pf_activation_channel: list(f.activation_channel),
+        pf_manual_handling_time: num(f.manual_handling_time), pf_saved_time: num(f.saved_time),
+        pf_trigger_type: list(f.trigger_type), pf_success_metrics: list(f.success_metrics),
+      };
+      for (const [k, v] of Object.entries(meta)) {
+        if (v !== null && v !== "" && !(typeof v === "number" && Number.isNaN(v))) await api.setIssueMetadataKey(intake.id, k, v);
+      }
+      return project.id;
+    },
+    onSuccess: (projectId) => { qc.invalidateQueries({ queryKey: ["portfolio"] }); onMoved(projectId); },
+  });
+  if (!confirming) {
+    return (
+      <button type="button" onClick={() => setConfirming(true)} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+        Flyt til Multica
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border p-4 text-sm">
+      <p>
+        Opret <strong>{row.name}</strong> som Multica-projekt med felter, beskrivelse og datoer fra ClickUp? Derefter kan du oprette
+        opgaver til agenter og redigere felterne her. <strong>ClickUp ændres ikke</strong> — luk eller arkivér opgaven dér selv, hvis den ikke
+        skal bruges mere.
+      </p>
+      {move.error && <p className="text-[#CF022D]">Kunne ikke flytte: {(move.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <button type="button" onClick={() => move.mutate()} disabled={move.isPending}
+          className="rounded-md bg-foreground px-3 py-1.5 font-medium text-background disabled:opacity-50">
+          {move.isPending ? "Flytter …" : "Ja, flyt til Multica"}
+        </button>
+        <button type="button" onClick={() => setConfirming(false)} className="rounded-md border px-3 py-1.5">Annullér</button>
+      </div>
+    </div>
+  );
+}
+
+function Detail({ row, back, chatHref, agentName, agents, project, onMoved }: { row: Row; back: () => void; chatHref: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null; onMoved: (projectId: string) => void }) {
   const [editing, setEditing] = useState(false);
   return (
     <div className="flex flex-col gap-6">
@@ -508,7 +569,8 @@ function Detail({ row, back, chatHref, agentName, agents, project }: { row: Row;
           <dt className="text-muted-foreground">Team</dt><dd>{show(row.fields.team)}</dd>
           <dt className="text-muted-foreground">Kilde</dt>
           <dd>
-            {row.url ? <a href={row.url} target="_blank" rel="noreferrer" className="underline underline-offset-4">Åbn i ClickUp</a> : "Opus-hub"}
+            {row.source === "multica" && "Multica"}{row.source === "multica" && row.url && " · flyttet fra "}
+            {row.url ? <a href={row.url} target="_blank" rel="noreferrer" className="underline underline-offset-4">{row.source === "multica" ? "ClickUp" : "Åbn i ClickUp"}</a> : row.source === "hub" ? "Opus-hub" : ""}
             {row.hub && ` · ${row.notes ?? 0} Opus-noter`}
           </dd>
         </dl>
@@ -555,9 +617,13 @@ function Detail({ row, back, chatHref, agentName, agents, project }: { row: Row;
             <History projectId={row.multica_project} agentName={agentName} />
           </>
         ) : (
-          <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
-            Projektet findes kun i ClickUp endnu, så der er ingen Multica-historik. Når det flyttes til Multica, samles dets issues her.
-          </p>
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-muted-foreground">
+              Projektet findes kun i ClickUp, så der er ingen Multica-historik endnu. Flyt det til Multica for at oprette opgaver til agenter
+              og samle historikken her.
+            </p>
+            <MoveToMultica row={row} onMoved={onMoved} />
+          </div>
         )}
       </section>
 
@@ -632,7 +698,8 @@ function PortfolioPage() {
     if (!pf) return [];
     const intakeBy = new Map((live?.intakes ?? []).filter((i) => i.project_id).map((i) => [i.project_id as string, i]));
     const known = new Set(pf.rows.map((r) => r.multica_project).filter(Boolean) as string[]);
-    const merged = pf.rows.map((r) => {
+    const moved = new Set((live?.intakes ?? []).map((i) => i.metadata.pf_clickup_id).filter(Boolean) as string[]);
+    const merged = pf.rows.filter((r) => !(r.source === "clickup" && moved.has(r.id))).map((r) => {
       const intake = r.multica_project ? intakeBy.get(r.multica_project) : undefined;
       if (!intake) return r;
       const extra = fieldsFromMeta(intake.metadata);
@@ -644,7 +711,7 @@ function PortfolioPage() {
       const intake = intakeBy.get(pr.id);
       if (!intake || known.has(pr.id)) continue;
       merged.push({
-        source: "multica", id: pr.id, name: pr.title, url: null,
+        source: "multica", id: pr.id, name: pr.title, url: (intake.metadata.pf_clickup_url as string) || null,
         status: (intake.metadata.pf_status as string) || PROJECT_TO_PF[pr.status] || "open",
         assignees: [], priority: pr.priority === "none" ? null : pr.priority,
         start_date: pr.start_date?.slice(0, 10) ?? null, due_date: pr.due_date?.slice(0, 10) ?? null,
@@ -699,7 +766,7 @@ function PortfolioPage() {
             <Overview rows={rows} open={(id) => setParams({ project: id })} />
           </>
         )}
-        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} agents={agents ?? []} project={rowProject} />}
+        {pf && tab === "overview" && row && <Detail row={row} back={() => setParams({ project: null })} chatHref={chatHref} agentName={agentName} agents={agents ?? []} project={rowProject} onMoved={(id) => setParams({ project: id })} />}
 
         {tab === "mine" && index && (
           <section className="flex flex-col gap-3">

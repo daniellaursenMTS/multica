@@ -73,6 +73,9 @@ export function ChatPage() {
   const regenerateQuickActions = useRegenerateChatQuickActions();
   const urlSession = searchParams.get("session") || null;
   const urlAgent = searchParams.get("agent") || null;
+  // Optional companion to `?agent=`: start the fresh chat with this project as
+  // its context (used by "Chat med projektet" on a project page).
+  const urlProject = searchParams.get("project") || null;
 
   // "Composing a brand-new chat" — the user hit ⊕ but hasn't sent yet, so no
   // session exists. At compact widths this decides list-vs-conversation; on desktop the
@@ -196,6 +199,7 @@ export function ChatPage() {
     if (agent) {
       consumedAgentIntent.current = urlAgent;
       startNewChat(agent);
+      if (urlProject) useChatStore.getState().setSelectedProjectId(urlProject);
       replace(wsPaths.chat());
       return;
     }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import type { Agent, Issue, IssueMetadata, IssueMetadataValue, Project, ProjectStatus } from "@multica/core/types";
@@ -551,22 +550,13 @@ export function MoveToMultica({ row, onMoved }: { row: Row; onMoved: (projectId:
   );
 }
 
-/** Opens a new Projekt-chat session tied to the project. Multica passes the session's project to
- *  the agent as Project Context, so the chat knows which project it is about. */
-export function ProjectChatButton({ agentId, projectId, name }: { agentId: string; projectId: string | null; name: string }) {
-  const router = useRouter();
+/** Opens the chat composing a new Projekt-chat conversation with the project as its context.
+ *  Multica passes that project to the agent as Project Context, so it knows what is being asked about.
+ *  The conversation is only created when the first message is sent. */
+export function ProjectChatButton({ agentId, projectId }: { agentId: string; projectId: string | null }) {
   const p = useWorkspacePaths();
-  const start = useMutation({
-    mutationFn: () => api.createChatSession({ agent_id: agentId, title: `Projekt: ${name}`, project_id: projectId }),
-    onSuccess: (session) => router.push(p.chatSession(session.id)),
-  });
-  return (
-    <button type="button" onClick={() => start.mutate()} disabled={start.isPending}
-      className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50"
-      title={start.error ? `Kunne ikke åbne chatten: ${(start.error as Error).message}` : undefined}>
-      {start.isPending ? "Åbner chat …" : start.error ? "Prøv chat igen" : "Chat med projektet →"}
-    </button>
-  );
+  const href = `${p.chatWithAgent(agentId)}${projectId ? `&project=${encodeURIComponent(projectId)}` : ""}`;
+  return <AppLink href={href} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Chat med projektet →</AppLink>;
 }
 
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
@@ -603,7 +593,7 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
               <span className="mr-1.5 text-[#CF022D]">◇</span>Se diamanten
             </button>
           )}
-          {row.hub && chatAgentId && <ProjectChatButton agentId={chatAgentId} projectId={row.multica_project ?? null} name={row.name} />}
+          {row.hub && chatAgentId && <ProjectChatButton agentId={chatAgentId} projectId={row.multica_project ?? null} />}
         </div>
       )}
 
@@ -671,7 +661,7 @@ export function DiamondTab({ row, chatAgentId }: { row: Row; chatAgentId: string
       <Diagram url={`/diamond-views/${row.hub}.svg`} label="diamant" />
       {chatAgentId && (
         <div className="flex flex-wrap items-center gap-3">
-          <ProjectChatButton agentId={chatAgentId} projectId={row.multica_project ?? null} name={row.name} />
+          <ProjectChatButton agentId={chatAgentId} projectId={row.multica_project ?? null} />
           <span className="text-xs text-muted-foreground">Skriv fx «Hvad er status på {row.name.split(" (")[0]}?». Svaret kommer i din rolles sprog, med kilder.</span>
         </div>
       )}

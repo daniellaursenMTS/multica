@@ -21,6 +21,8 @@ export interface CreateIssueRequest {
   /** Issue-scoped label IDs to attach in the same transaction as the create.
    *  Unknown or non-issue ids are rejected by the server with 400. */
   label_ids?: string[];
+  /** Create even when an active issue with the same title exists (the server refuses by default). */
+  allow_duplicate?: boolean;
 }
 
 export interface CreateCommentSubIssueManualRequest {

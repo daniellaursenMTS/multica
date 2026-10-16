@@ -619,10 +619,13 @@ export function CreateDiamond({ row, agents, people, mode = "create" }: { row: R
           ...(r === "bo" && boUnconfirmed ? { confirmed: false } : {}),
         }]));
       if (editing) {
-        const spec = { action: "update_roles", slug: row.hub, multica_project: row.multica_project, roles: roleSpec };
+        // `before` is what this form showed; the script stops if the roster moved on since (another
+        // «Ret roller» ran), so a stale form can never undo someone else's change.
+        const before = Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, current(r) || null]));
+        const spec = { action: "update_roles", slug: row.hub, multica_project: row.multica_project, before, roles: roleSpec };
         return api.createIssue({
           title: `Ret roller — ${row.name}`, project_id: row.multica_project ?? undefined, status: "todo",
-          assignee_type: "agent", assignee_id: agent!.id,
+          assignee_type: "agent", assignee_id: agent!.id, allow_duplicate: true,
           description: `Ret roller i diamanten for **${row.name}** fra Diamant-fanen.\n\n${changes.length ? changes.join("\n") : "Ingen personskift; kun bekræftelse eller email."}\n\nTidligere noter bliver i hubben med den, der sagde dem.\n\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`,
         });
       }

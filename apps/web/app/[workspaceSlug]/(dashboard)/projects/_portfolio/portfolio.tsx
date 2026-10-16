@@ -754,10 +754,127 @@ export function DiamondSyncState({ row }: { row: Row }) {
   return null;
 }
 
+const SUMMARY_AGENT_NAME = "Projekt-resumé";
+const SHARE_LABEL = { none: "Ingen deling", summary: "Resumé", full: "Hele projektet" } as const;
+type ShareMode = keyof typeof SHARE_LABEL;
+const meta = (row: Row, k: string) => (typeof row.intake_meta?.[k] === "string" ? (row.intake_meta[k] as string) : null);
+export function shareState(row: Row) {
+  const raw = meta(row, "kh_share");
+  let mode: ShareMode = "none";
+  try { if (raw) mode = (JSON.parse(raw).mode as ShareMode) ?? "none"; } catch { /* unreadable: treated as none */ }
+  const requested = meta(row, "kh_draft_requested");
+  return {
+    mode, summary: meta(row, "kh_summary") ?? "", draft: meta(row, "kh_summary_draft"),
+    pending: !!raw && raw !== meta(row, "kh_synced"), error: meta(row, "kh_sync_error"),
+    drafting: !!requested && requested !== meta(row, "kh_draft_for"),
+  };
+}
+
+/** «Deling med Knowledge Hub»: the project's BO, PO or Platform Owner chooses none, an approved
+ *  summary, or the whole hub. Saved on the intake issue; sync_diamonds.py writes projects/_shared/,
+ *  the only place Knowledge Hub reads projects from, and checks the role again. */
+export function KnowledgeShare({ row, me, agents }: { row: Row; me: string | null; agents: Agent[] }) {
+  const email = useAuthStore((s) => s.user?.email ?? null);
+  const qc = useQueryClient();
+  const st = shareState(row);
+  const roles = ROLE_CODES.filter((r) => r !== "to").map((r) => row.dia_spec?.roles[r]?.person ?? row.diamond?.[r]?.person ?? null);
+  const canShare = !!me && roles.includes(me);
+  const agent = agents.find((a) => !a.archived_at && a.name === SUMMARY_AGENT_NAME);
+  const [choice, setChoice] = useState<ShareMode | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const mode = choice ?? st.mode;
+  const body = text ?? (st.summary || st.draft || "");
+  const intake = row.intake_issue;
+  const refresh = () => qc.invalidateQueries({ queryKey: ["portfolio", "live"] });
+
+  const save = useMutation({
+    mutationFn: async (next: ShareMode) => {
+      if (!intake || !email) throw new Error("Projektet mangler sit intake-issue eller dit login.");
+      if (next === "summary") await api.setIssueMetadataKey(intake, "kh_summary", body.trim());
+      const share = { mode: next, by: email.toLowerCase(), at: new Date().toISOString(), rev: Math.random().toString(36).slice(2, 10) };
+      await api.setIssueMetadataKey(intake, "kh_share", JSON.stringify(share));
+    },
+    onSuccess: () => { setChoice(null); setText(null); refresh(); },
+  });
+  const draft = useMutation({
+    mutationFn: async () => {
+      if (!intake || !agent) throw new Error(`Agenten «${SUMMARY_AGENT_NAME}» findes ikke.`);
+      const request = Math.random().toString(36).slice(2, 10);
+      await api.createIssue({
+        title: `Knowledge Hub-resumé — ${row.name}`, project_id: row.multica_project ?? undefined, status: "todo",
+        assignee_type: "agent", assignee_id: agent.id, allow_duplicate: true,
+        description: `Skriv et udkast til et resumé af **${row.name}**, som projektets ejer kan godkende og dele med Knowledge Hub.\n\nintake: ${intake}\nrequest: ${request}\n`,
+      });
+      await api.setIssueMetadataKey(intake, "kh_draft_requested", request);
+    },
+    onSuccess: () => { setText(null); refresh(); },
+  });
+
+  const btn = "rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50";
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border p-4" aria-labelledby="kh">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 id="kh" className="text-sm font-medium">Deling med Knowledge Hub</h3>
+        <span className="text-sm text-muted-foreground">Nu: <strong className="text-foreground">{SHARE_LABEL[st.mode]}</strong></span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Projektets hub er kun for diamanten. Vælg, hvad resten af Matas må finde via Knowledge Hub: intet, et resumé du har godkendt,
+        eller hele hubben.
+      </p>
+      {st.error && <p role="alert" className="text-sm text-[#CF022D]">Delingen kunne ikke gennemføres: {st.error}</p>}
+      {st.pending && !st.error && <p role="status" className="text-sm text-muted-foreground">Gemt. Synkroniseres til Knowledge Hub (op til et minut) …</p>}
+      {!canShare ? (
+        <p className="text-sm text-muted-foreground">Kun projektets Business Owner, Product Owner eller Platform Owner kan ændre delingen.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-1 rounded-md border p-0.5 text-sm self-start" role="radiogroup" aria-label="Deling">
+            {(Object.keys(SHARE_LABEL) as ShareMode[]).map((k) => (
+              <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => setChoice(k)}
+                className={`rounded px-3 py-1 ${mode === k ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60"}`}>
+                {SHARE_LABEL[k]}
+              </button>
+            ))}
+          </div>
+          {mode === "summary" && (
+            <div className="flex flex-col gap-2">
+              <textarea id="kh-summary" rows={8} value={body} onChange={(e) => setText(e.target.value)}
+                className="rounded-md border bg-background px-2 py-1.5 text-sm leading-relaxed"
+                placeholder="Skriv resuméet selv, eller lad agenten lave et udkast ud fra hubben." />
+              {st.drafting && <p role="status" className="text-sm text-muted-foreground">{SUMMARY_AGENT_NAME} skriver et udkast ud fra hubben …</p>}
+              {st.draft && !st.summary && text === null && <p className="text-xs text-muted-foreground">Udkast fra {SUMMARY_AGENT_NAME}. Læs og ret det, før du godkender.</p>}
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={btn} disabled={draft.isPending || st.drafting || !agent} onClick={() => draft.mutate()}>
+                  {draft.isPending ? "Bestiller …" : st.draft ? "Lav nyt udkast" : "Lav udkast med agent"}
+                </button>
+                <button type="button" disabled={!body.trim() || save.isPending || (st.mode === "summary" && body.trim() === st.summary.trim())}
+                  onClick={() => save.mutate("summary")}
+                  className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
+                  {save.isPending ? "Gemmer …" : "Godkend og del resumé"}
+                </button>
+              </div>
+            </div>
+          )}
+          {mode === "full" && st.mode !== "full" && (
+            <div className="flex flex-col gap-2 text-sm">
+              <p>Alt i projektets hub — alle noter fra alle roller — bliver søgbart for alle i Matas via Knowledge Hub.</p>
+              <button type="button" disabled={save.isPending} onClick={() => save.mutate("full")}
+                className="self-start rounded-md bg-foreground px-3 py-1.5 font-medium text-background disabled:opacity-50">Del hele projektet</button>
+            </div>
+          )}
+          {mode === "none" && st.mode !== "none" && (
+            <button type="button" disabled={save.isPending} onClick={() => save.mutate("none")} className={`${btn} self-start`}>Stop deling</button>
+          )}
+          {(save.error || draft.error) && <p className="text-sm text-[#CF022D]">{((save.error || draft.error) as Error).message}</p>}
+        </>
+      )}
+    </section>
+  );
+}
+
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
-export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people, rows }: {
+export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people, rows, me }: {
   row: Row; chatAgentId: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null;
-  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void; people: string[]; rows: Row[];
+  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void; people: string[]; rows: Row[]; me: string | null;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -794,6 +911,7 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 
       {!row.hub && !row.dia_spec && row.multica_project && <CreateDiamond row={row} people={people} rows={rows} />}
       {!row.hub && row.dia_spec && <DiamondSyncState row={row} />}
+      {(row.hub || row.dia_spec) && row.intake_issue && <KnowledgeShare row={row} me={me} agents={agents} />}
 
       <section className="flex flex-col gap-2" aria-labelledby="hist">
         <h3 id="hist" className="text-sm font-medium">Opgaver og historik</h3>
@@ -894,8 +1012,13 @@ export function usePortfolio() {
       return { projects: projects.projects, intakes: intakes.issues };
     },
     // While a saved diamond waits for the Mac's sync, check every few seconds.
-    refetchInterval: (q) => (q.state.data?.intakes.some((i) => typeof i.metadata.dia_spec === "string"
-      && (i.metadata.dia_spec !== i.metadata.dia_synced_spec || !!i.metadata.dia_sync_error)) ? 5000 : false),
+    refetchInterval: (q) => (q.state.data?.intakes.some((i) => {
+      const m = i.metadata;
+      const dia = typeof m.dia_spec === "string" && m.dia_spec !== m.dia_synced_spec && !m.dia_sync_error;
+      const kh = typeof m.kh_share === "string" && m.kh_share !== m.kh_synced && !m.kh_sync_error;
+      const drafting = typeof m.kh_draft_requested === "string" && m.kh_draft_requested !== m.kh_draft_for;
+      return dia || kh || drafting;
+    }) ? 5000 : false),
   });
   // The generated views change when a sync lands; this key makes the page fetch them again.
   const viewsKey = String((live?.intakes ?? []).map((i) => String(i.metadata.dia_synced_spec ?? "")).join("|")

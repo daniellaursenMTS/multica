@@ -15,7 +15,7 @@ function ProjectPage({ id }: { id: string }) {
   const router = useRouter();
   const params = useSearchParams();
   const p = useWorkspacePaths();
-  const { find, project, loading, agents, agentName, chatHref } = usePortfolio();
+  const { find, project, loading, agents, agentName, chatAgentId } = usePortfolio();
   const row = find(id);
   const projectId = row?.multica_project ?? (row ? null : id);
   const tabs: [View, string][] = [["overview", "Oversigt"]];
@@ -60,11 +60,11 @@ function ProjectPage({ id }: { id: string }) {
           <div className="p-6">
             {!row && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter projekt" />}
             {row && view === "overview" && (
-              <OverviewTab row={row} chatHref={chatHref} agentName={agentName} agents={agents} project={project(row)}
+              <OverviewTab row={row} chatAgentId={chatAgentId} agentName={agentName} agents={agents} project={project(row)}
                 onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub ? () => go("diamond") : null}
                 editing={editing} setEditing={setEditing} />
             )}
-            {row && view === "diamond" && <DiamondTab row={row} chatHref={chatHref} />}
+            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} />}
           </div>
         </div>
       )}

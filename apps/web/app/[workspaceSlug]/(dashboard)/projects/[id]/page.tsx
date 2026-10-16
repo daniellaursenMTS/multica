@@ -15,7 +15,7 @@ function ProjectPage({ id }: { id: string }) {
   const router = useRouter();
   const params = useSearchParams();
   const p = useWorkspacePaths();
-  const { find, project, loading, agents, agentName, chatAgentId, index, rows } = usePortfolio();
+  const { find, project, loading, agents, agentName, chatAgentId, index, rows, viewsKey } = usePortfolio();
   // Name suggestions for a new diamond: real people only — never the fictional demo cast.
   const demoHubs = new Set(rows.filter((r) => r.demo && r.hub).map((r) => r.hub as string));
   const people = (index?.people ?? []).filter((x) => x.roles.some((r) => !demoHubs.has(r.project))).map((x) => x.name);
@@ -23,7 +23,7 @@ function ProjectPage({ id }: { id: string }) {
   const projectId = row?.multica_project ?? (row ? null : id);
   const tabs: [View, string][] = [["overview", "Oversigt"]];
   if (projectId) tabs.push(["kanban", "Kanban"]);
-  if (row?.hub) tabs.push(["diamond", "Diamant"]);
+  if (row?.hub || row?.dia_spec) tabs.push(["diamond", "Diamant"]);
   const asked = params.get("view") as View | null;
   const view: View = tabs.some(([k]) => k === asked) ? (asked as View) : row || loading ? "overview" : "kanban";
   const go = (v: View) => router.push(v === "overview" ? "?" : `?view=${v}`);
@@ -64,10 +64,10 @@ function ProjectPage({ id }: { id: string }) {
             {!row && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter projekt" />}
             {row && view === "overview" && (
               <OverviewTab row={row} chatAgentId={chatAgentId} agentName={agentName} agents={agents} project={project(row)}
-                onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub ? () => go("diamond") : null}
-                editing={editing} setEditing={setEditing} people={people} />
+                onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub || row.dia_spec ? () => go("diamond") : null}
+                editing={editing} setEditing={setEditing} people={people} rows={rows} />
             )}
-            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} agents={agents} people={people} />}
+            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} people={people} rows={rows} viewsKey={viewsKey} />}
           </div>
         </div>
       )}

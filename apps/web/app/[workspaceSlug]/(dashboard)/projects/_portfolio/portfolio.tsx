@@ -39,6 +39,9 @@ export interface Row {
   intake_issue?: string | null;
   intake_meta?: IssueMetadata;
   lead_id?: string | null;
+  dia_spec?: DiaSpec | null;
+  dia_pending?: boolean;
+  dia_error?: string | null;
 }
 export interface Portfolio { synced_at: string | null; as_of: string; rows: Row[] }
 export interface Index {
@@ -559,30 +562,42 @@ export function ProjectChatButton({ agentId, projectId }: { agentId: string; pro
   return <AppLink href={href} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Chat med projektet →</AppLink>;
 }
 
-const DIAMOND_AGENT_NAME = "Diamant-opretter";
+export interface DiaSpec {
+  slug: string; name: string; aliases: string[];
+  roles: Record<RoleCode, { person: string | null; confirmed?: boolean; email?: string }>;
+}
+const ROLE_CODES: RoleCode[] = ["bo", "po", "plo", "to"];
 const slugify = (x: string) =>
   x.toLowerCase().replace(/æ/g, "ae").replace(/ø/g, "oe").replace(/å/g, "aa")
     .normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 41);
+export function parseSpec(raw: unknown): DiaSpec | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const d = JSON.parse(raw);
+    return d && typeof d === "object" && d.roles ? (d as DiaSpec) : null;
+  } catch {
+    return null;
+  }
+}
 
-/** «Opret diamant»: the form becomes an issue for Diamant-opretter, which runs create_diamond.py.
- *  The roster on disk is only ever changed by that script, and the request stays in the history. */
-export function CreateDiamond({ row, agents, people, mode = "create" }: { row: Row; agents: Agent[]; people: string[]; mode?: "create" | "roles" }) {
+/** Opret diamant / Ret roller. The diamond is saved at once in Multica, as `dia_spec` on the
+ *  project's intake issue; sync_diamonds.py on the Mac applies it to roster.json and the hub within
+ *  a minute. The page shows the saved roles straight away and the sync state until it lands. */
+export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row; people: string[]; rows: Row[]; mode?: "create" | "roles" }) {
   const editing = mode === "roles";
   const workspace = useCurrentWorkspace();
-  const p = useWorkspacePaths();
   const qc = useQueryClient();
   const { data: members } = useQuery({ ...memberListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });
-  const agent = agents.find((a) => !a.archived_at && a.name === DIAMOND_AGENT_NAME);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(row.name);
   const [aliases, setAliases] = useState("");
-  const current = (r: RoleCode) => (editing ? row.diamond?.[r]?.person ?? "" : "");
-  const initial = () => Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, { person: current(r), email: "" }])) as
+  const current = (r: RoleCode) => (editing ? row.dia_spec?.roles[r]?.person ?? row.diamond?.[r]?.person ?? "" : "");
+  const initial = () => Object.fromEntries(ROLE_CODES.map((r) => [r, { person: current(r), email: "" }])) as
     Record<RoleCode, { person: string; email: string }>;
+  const wasUnconfirmed = editing && (row.dia_spec?.roles.bo?.confirmed === false || row.diamond?.bo?.confirmed === false);
   const [roles, setRoles] = useState(initial);
-  const [boUnconfirmed, setBoUnconfirmed] = useState(editing && row.diamond?.bo?.confirmed === false);
-  const [created, setCreated] = useState<Issue | null>(null);
-  const slug = slugify(name);
+  const [boUnconfirmed, setBoUnconfirmed] = useState(wasUnconfirmed);
+  const slug = editing ? row.dia_spec?.slug ?? row.hub ?? "" : slugify(name);
   // Roster names win: a Multica member whose name looks like someone already in a diamond
   // ("Daniel Laursen" vs "Daniel") is not suggested, so one person keeps one name everywhere.
   const similar = (v: string) => {
@@ -607,86 +622,65 @@ export function CreateDiamond({ row, agents, people, mode = "create" }: { row: R
       }
       return { ...x, [r]: next };
     });
-  const filled = (["bo", "po", "plo", "to"] as RoleCode[]).some((r) => roles[r].person.trim());
-  const changes = (["bo", "po", "plo", "to"] as RoleCode[]).filter((r) => roles[r].person.trim() !== current(r))
-    .map((r) => `- ${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`);
-  const anyChange = !editing || changes.length > 0 || boUnconfirmed !== (row.diamond?.bo?.confirmed === false)
-    || (["bo", "po", "plo", "to"] as RoleCode[]).some((r) => roles[r].email.trim());
-  const create = useMutation({
-    mutationFn: () => {
-      const roleSpec = Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, {
-          person: roles[r].person.trim() || null, ...(roles[r].email.trim() ? { email: roles[r].email.trim() } : {}),
-          ...(r === "bo" && boUnconfirmed ? { confirmed: false } : {}),
-        }]));
-      if (editing) {
-        // `before` is what this form showed; the script stops if the roster moved on since (another
-        // «Ret roller» ran), so a stale form can never undo someone else's change.
-        const before = Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, current(r) || null]));
-        const spec = { action: "update_roles", slug: row.hub, multica_project: row.multica_project, before, roles: roleSpec };
-        return api.createIssue({
-          title: `Ret roller — ${row.name}`, project_id: row.multica_project ?? undefined, status: "todo",
-          assignee_type: "agent", assignee_id: agent!.id, allow_duplicate: true,
-          description: `Ret roller i diamanten for **${row.name}** fra Diamant-fanen.\n\n${changes.length ? changes.join("\n") : "Ingen personskift; kun bekræftelse eller email."}\n\nTidligere noter bliver i hubben med den, der sagde dem.\n\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`,
-        });
-      }
-      const spec = {
-        slug, name: name.trim(), aliases: aliases.split(",").map((a) => a.trim()).filter(Boolean),
-        multica_project: row.multica_project, status: row.status, description: row.description, roles: roleSpec,
+  const filled = ROLE_CODES.some((r) => roles[r].person.trim());
+  const changes = ROLE_CODES.filter((r) => roles[r].person.trim() !== current(r))
+    .map((r) => `${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`);
+  const anyChange = !editing || changes.length > 0 || boUnconfirmed !== wasUnconfirmed || ROLE_CODES.some((r) => roles[r].email.trim());
+  // Checks the sync would refuse, shown before saving. The sync checks again.
+  const slugTaken = !editing && rows.some((r) => r.id !== row.id && (r.hub === slug || r.dia_spec?.slug === slug));
+  const nameTaken = !editing && rows.find((r) => r.id !== row.id && (r.hub || r.dia_spec) &&
+    [r.dia_spec?.name, ...(r.dia_spec?.aliases ?? [])].some((n) => n && n.toLowerCase() === name.trim().toLowerCase()));
+  const problem = slug.length < 2 ? "Navnet skal give en mappe på mindst to tegn."
+    : slugTaken ? `Mappen projects/${slug} er allerede brugt. Vælg et andet navn.`
+    : nameTaken ? `«${name.trim()}» bruges allerede af ${nameTaken.name}. Opus-noter skal kunne skelne projekterne.` : null;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const spec: DiaSpec = {
+        slug,
+        name: editing ? row.dia_spec?.name ?? row.name : name.trim(),
+        aliases: editing ? row.dia_spec?.aliases ?? [] : aliases.split(",").map((a) => a.trim()).filter(Boolean),
+        roles: Object.fromEntries(ROLE_CODES.map((r) => [r, {
+          person: roles[r].person.trim() || null, ...(roles[r].email.trim() ? { email: roles[r].email.trim().toLowerCase() } : {}),
+          ...(r === "bo" && boUnconfirmed && roles[r].person.trim() ? { confirmed: false } : {}),
+        }])) as DiaSpec["roles"],
       };
-      const lines = (["bo", "po", "plo", "to"] as RoleCode[]).map((r) => `- ${ROLE_NAME[r]}: ${roles[r].person.trim() || "ingen"}`);
-      return api.createIssue({
-        title: `Opret diamant — ${name.trim()}`, project_id: row.multica_project ?? undefined, status: "todo",
-        assignee_type: "agent", assignee_id: agent!.id,
-        description: `Opret diamant for **${name.trim()}** fra projektsiden.\n\n${lines.join("\n")}\n\nOpus-noter med «Projekt: ${name.trim()}» går derefter til hubben \`projects/${slug}\`.\n\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`,
-      });
+      let intake = row.intake_issue ?? null;
+      if (!intake) {
+        intake = (await api.createIssue({ title: `Intake — ${row.name}`, project_id: row.multica_project ?? undefined, status: "done",
+          description: "Portfolio-felter og diamant for projektet. Redigeres fra projektsiden i Multica." })).id;
+        await api.setIssueMetadataKey(intake, "pf_intake", true);
+      }
+      await api.setIssueMetadataKey(intake, "dia_spec", JSON.stringify(spec));
     },
-    onSuccess: (issue) => {
-      setCreated(issue);
+    onSuccess: () => {
       setOpen(false);
-      if (row.multica_project) qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", row.multica_project] });
+      qc.invalidateQueries({ queryKey: ["portfolio", "live"] });
     },
   });
   const input = "rounded-md border bg-background px-2 py-1.5";
 
   if (!open && editing) {
-    return created ? (
-      <p className="text-sm">
-        <AppLink href={p.issueDetail(created.id)} className="font-medium underline underline-offset-4">{created.identifier}</AppLink>{" "}
-        er sendt til {DIAMOND_AGENT_NAME}. Genindlæs siden, når den står i review.
-      </p>
-    ) : agent ? (
-      <button type="button" onClick={() => { setRoles(initial()); setOpen(true); }}
+    return (
+      <button type="button" onClick={() => { setRoles(initial()); setBoUnconfirmed(wasUnconfirmed); setOpen(true); }}
         className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Ret roller</button>
-    ) : null;
+    );
   }
   if (!open) {
     return (
       <div className="flex flex-col gap-2 rounded-md border border-dashed px-4 py-3 text-sm">
-        {created ? (
-          <p>
-            <AppLink href={p.issueDetail(created.id)} className="font-medium underline underline-offset-4">{created.identifier}</AppLink>{" "}
-            er sendt til {DIAMOND_AGENT_NAME}. Genindlæs siden, når den står i review, så kommer fanen Diamant.
-          </p>
-        ) : (
-          <>
-            <p className="text-muted-foreground">
-              Projektet har ingen diamant. Med en diamant får Business Owner, Product Owner, Platform Owner og Technical Owner hver deres
-              status, Opus-noter samles i en hub, og projekt-chatten kan svare om projektet.
-            </p>
-            {agent ? (
-              <button type="button" onClick={() => setOpen(true)} className="self-start rounded-md border px-3 py-1.5 font-medium hover:bg-accent">
-                <span className="mr-1.5 text-[#CF022D]">◇</span>Opret diamant
-              </button>
-            ) : (
-              <p className="text-xs text-muted-foreground">Agenten «{DIAMOND_AGENT_NAME}» findes ikke i workspacet.</p>
-            )}
-          </>
-        )}
+        <p className="text-muted-foreground">
+          Projektet har ingen diamant. Med en diamant får Business Owner, Product Owner, Platform Owner og Technical Owner hver deres
+          status, Opus-noter samles i en hub, og projekt-chatten kan svare om projektet.
+        </p>
+        <button type="button" onClick={() => setOpen(true)} className="self-start rounded-md border px-3 py-1.5 font-medium hover:bg-accent">
+          <span className="mr-1.5 text-[#CF022D]">◇</span>Opret diamant
+        </button>
       </div>
     );
   }
   return (
-    <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (filled && anyChange && (editing || slug.length > 1)) create.mutate(); }}>
+    <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (filled && anyChange && !problem) save.mutate(); }}>
       <div className="text-sm font-medium"><span className="mr-1.5 text-[#CF022D]">◇</span>{editing ? `Ret roller — ${row.name}` : "Opret diamant"}</div>
       {!editing && <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
@@ -701,7 +695,7 @@ export function CreateDiamond({ row, agents, people, mode = "create" }: { row: R
       </div>}
       <datalist id="dia-people">{names.map((n) => <option key={n} value={n} />)}</datalist>
       <div className="grid gap-3">
-        {(["bo", "po", "plo", "to"] as RoleCode[]).map((r) => {
+        {ROLE_CODES.map((r) => {
           const like = similar(roles[r].person);
           return (
           <div key={r} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr] sm:items-center">
@@ -728,15 +722,16 @@ export function CreateDiamond({ row, agents, people, mode = "create" }: { row: R
       </div>
       <p className="text-xs text-muted-foreground">
         En tom rolle dækkes af Platform Owner, indtil den er besat. Email kobler personens Multica-login til rollen, så projekt-chatten
-        ved, hvem der spørger. {DIAMOND_AGENT_NAME} {editing ? "retter rollerne" : "opretter diamanten"} og skriver i opgaven, når den er klar.
+        ved, hvem der spørger. Gemmes med det samme; hub og status følger med inden for et minut.
         {editing && " Tidligere noter bliver i hubben med den, der sagde dem; den nye person får sin egen status fra sin første note."}
       </p>
-      {editing && changes.length > 0 && <ul className="text-sm">{changes.map((c) => <li key={c}>{c.slice(2)}</li>)}</ul>}
-      {create.error && <p className="text-sm text-[#CF022D]">Kunne ikke oprette opgaven: {(create.error as Error).message}</p>}
+      {editing && changes.length > 0 && <ul className="text-sm">{changes.map((c) => <li key={c}>{c}</li>)}</ul>}
+      {problem && <p className="text-sm text-[#CF022D]">{problem}</p>}
+      {save.error && <p className="text-sm text-[#CF022D]">Kunne ikke gemme: {(save.error as Error).message}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={!filled || !anyChange || (!editing && slug.length < 2) || create.isPending}
+        <button type="submit" disabled={!filled || !anyChange || !!problem || save.isPending}
           className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
-          {create.isPending ? "Sender …" : editing ? "Ret roller" : "Opret diamant"}
+          {save.isPending ? "Gemmer …" : editing ? "Gem roller" : "Opret diamant"}
         </button>
         <button type="button" onClick={() => setOpen(false)} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
       </div>
@@ -744,10 +739,25 @@ export function CreateDiamond({ row, agents, people, mode = "create" }: { row: R
   );
 }
 
+/** Where the diamond's last save stands on its way to roster.json and the hub. */
+export function DiamondSyncState({ row }: { row: Row }) {
+  if (row.dia_error) {
+    return (
+      <p role="alert" className="rounded-md border border-[#CF022D]/40 px-3 py-2 text-sm text-[#CF022D]">
+        Diamanten er gemt i Multica, men kunne ikke synkroniseres: {row.dia_error} Ret den med «Ret roller».
+      </p>
+    );
+  }
+  if (row.dia_pending) {
+    return <p role="status" className="text-sm text-muted-foreground">Gemt. Synkroniseres til hub og status (op til et minut) …</p>;
+  }
+  return null;
+}
+
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
-export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people }: {
+export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people, rows }: {
   row: Row; chatAgentId: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null;
-  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void; people: string[];
+  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void; people: string[]; rows: Row[];
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -771,9 +781,9 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 
       {row.description && <p className="max-w-[75ch] whitespace-pre-line leading-relaxed">{row.description}</p>}
 
-      {row.hub && (
+      {(row.hub || row.dia_spec) && (
         <div className="flex flex-wrap items-center gap-2">
-          {row.hub && openDiamond && (
+          {openDiamond && (
             <button type="button" onClick={openDiamond} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
               <span className="mr-1.5 text-[#CF022D]">◇</span>Se diamanten
             </button>
@@ -782,7 +792,8 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
         </div>
       )}
 
-      {!row.hub && row.multica_project && <CreateDiamond row={row} agents={agents} people={people} />}
+      {!row.hub && !row.dia_spec && row.multica_project && <CreateDiamond row={row} people={people} rows={rows} />}
+      {!row.hub && row.dia_spec && <DiamondSyncState row={row} />}
 
       <section className="flex flex-col gap-2" aria-labelledby="hist">
         <h3 id="hist" className="text-sm font-medium">Opgaver og historik</h3>
@@ -821,23 +832,25 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 }
 
 /** Diamant-fanen: de fire roller, hvornår hver sidst har opdateret, og diagrammet. */
-export function DiamondTab({ row, chatAgentId, agents, people }: { row: Row; chatAgentId: string | null; agents: Agent[]; people: string[] }) {
-  if (!row.hub) {
+export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: Row; chatAgentId: string | null; people: string[]; rows: Row[]; viewsKey: string }) {
+  if (!row.hub && !row.dia_spec) {
     return (
       <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
-        Projektet har ingen diamant endnu. Den kommer, når projektet får sin første Opus-note, eller når det kobles til en hub i roster.json.
+        Projektet har ingen diamant endnu. Opret den fra Oversigt.
       </p>
     );
   }
+  const slug = row.hub ?? row.dia_spec?.slug;
   return (
     <section className="flex flex-col gap-3" aria-label="Diamanten">
+      <DiamondSyncState row={row} />
       <ul className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-        {(["bo", "po", "plo", "to"] as RoleCode[]).map((c) => {
+        {ROLE_CODES.map((c) => {
           const r = row.diamond?.[c];
           return (
             <li key={c} className="rounded-md border px-3 py-2">
               <div className="text-xs text-muted-foreground">{ROLE_NAME[c]}</div>
-              <div className="font-medium">{r?.person || "ikke besat"}</div>
+              <div className="font-medium">{r?.person || "ikke besat"}{r?.confirmed === false && <span className="font-normal text-muted-foreground"> (skal bekræftes)</span>}</div>
               <div className={`text-xs ${r?.state === "overdue" ? "text-[#CF022D] font-medium" : "text-muted-foreground"}`}>
                 {STATE_TEXT[r?.state || "waiting"]} · {r?.text}
               </div>
@@ -845,9 +858,10 @@ export function DiamondTab({ row, chatAgentId, agents, people }: { row: Row; cha
           );
         })}
       </ul>
-      {row.multica_project && <CreateDiamond row={row} agents={agents} people={people} mode="roles" />}
-      <Diagram url={`/diamond-views/${row.hub}.svg`} label="diamant" />
-      {chatAgentId && (
+      {row.multica_project && <CreateDiamond key={row.dia_spec ? JSON.stringify(row.dia_spec.roles) : "none"} row={row} people={people} rows={rows} mode="roles" />}
+      {row.hub ? <Diagram url={`/diamond-views/${slug}.svg?v=${viewsKey}`} label="diamant" />
+        : <p className="text-sm text-muted-foreground">Diagrammet tegnes, når diamanten er synkroniseret.</p>}
+      {chatAgentId && row.hub && (
         <div className="flex flex-wrap items-center gap-3">
           <ProjectChatButton agentId={chatAgentId} projectId={row.multica_project ?? null} />
           <span className="text-xs text-muted-foreground">Skriv fx «Hvad er status på {row.name.split(" (")[0]}?». Svaret kommer i din rolles sprog, med kilder.</span>
@@ -869,11 +883,6 @@ export function usePortfolio() {
   const chatAgent = agents?.find((a) => !a.archived_at && a.name === PROJECT_CHAT_AGENT_NAME);
   const agentName = (id: string | null) => agents?.find((a) => a.id === id)?.name ?? "agent";
 
-  const { text: pfText, error } = useText("/diamond-views/portfolio.json");
-  const { text: idxText } = useText("/diamond-views/index.json");
-  const pf = useMemo<Portfolio | null>(() => (pfText ? JSON.parse(pfText) : null), [pfText]);
-  const index = useMemo<Index | null>(() => (idxText ? JSON.parse(idxText) : null), [idxText]);
-
   const { data: live, isLoading: liveLoading } = useQuery({
     queryKey: ["portfolio", "live", workspace?.id],
     enabled: !!workspace?.id,
@@ -884,7 +893,17 @@ export function usePortfolio() {
       ]);
       return { projects: projects.projects, intakes: intakes.issues };
     },
+    // While a saved diamond waits for the Mac's sync, check every few seconds.
+    refetchInterval: (q) => (q.state.data?.intakes.some((i) => typeof i.metadata.dia_spec === "string"
+      && (i.metadata.dia_spec !== i.metadata.dia_synced_spec || !!i.metadata.dia_sync_error)) ? 5000 : false),
   });
+  // The generated views change when a sync lands; this key makes the page fetch them again.
+  const viewsKey = String((live?.intakes ?? []).map((i) => String(i.metadata.dia_synced_spec ?? "")).join("|")
+    .split("").reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 7) >>> 0);
+  const { text: pfText, error } = useText(`/diamond-views/portfolio.json?v=${viewsKey}`);
+  const { text: idxText } = useText(`/diamond-views/index.json?v=${viewsKey}`);
+  const pf = useMemo<Portfolio | null>(() => (pfText ? JSON.parse(pfText) : null), [pfText]);
+  const index = useMemo<Index | null>(() => (idxText ? JSON.parse(idxText) : null), [idxText]);
 
   const rows = useMemo<Row[]>(() => {
     const generated = pf?.rows ?? [];
@@ -900,6 +919,15 @@ export function usePortfolio() {
       const intake = intakeBy.get(pr.id);
       const hub = hubBy.get(pr.id);
       const extra = fieldsFromMeta(intake?.metadata);
+      const spec = parseSpec(intake?.metadata.dia_spec);
+      // Saved roles show at once; the activity state per person comes from the last sync.
+      const diamond = spec ? Object.fromEntries(ROLE_CODES.map((c) => {
+        const v = hub?.diamond?.[c];
+        const person = spec.roles[c]?.person ?? null;
+        const same = v && v.person === person;
+        return [c, { person, confirmed: spec.roles[c]?.confirmed !== false,
+          state: same ? v.state : person ? "waiting" : "vacant", text: same ? v.text : person ? "afventer første note" : "ikke besat" }];
+      })) as Row["diamond"] : hub?.diamond;
       out.push({
         ...(hub ?? {}),
         source: "multica", id: pr.id, name: pr.title,
@@ -912,6 +940,9 @@ export function usePortfolio() {
         fields: { ...(hub?.fields ?? {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== null)) },
         multica_project: pr.id, intake_issue: intake?.id ?? null, intake_meta: intake?.metadata,
         lead_id: pr.lead_type === "member" ? pr.lead_id : null,
+        diamond, dia_spec: spec,
+        dia_pending: !!spec && intake?.metadata.dia_spec !== intake?.metadata.dia_synced_spec,
+        dia_error: typeof intake?.metadata.dia_sync_error === "string" ? intake.metadata.dia_sync_error : null,
       });
     }
     const clickup = generated.filter((r) => r.source === "clickup" && !moved.has(r.id) && r.status !== "closed");
@@ -924,5 +955,5 @@ export function usePortfolio() {
   const find = (id: string | null) => (id ? rows.find((r) => r.id === id) ?? rows.find((r) => r.multica_project === id) ?? null : null);
   const project = (r: Row | null) => live?.projects.find((x) => x.id === r?.multica_project) ?? null;
 
-  return { pf, index, rows, me, isMine, find, project, error, loading: !live && liveLoading, agents: agents ?? [], agentName, chatAgentId: chatAgent?.id ?? null };
+  return { pf, index, rows, me, isMine, find, project, error, loading: !live && liveLoading, agents: agents ?? [], agentName, chatAgentId: chatAgent?.id ?? null, viewsKey };
 }

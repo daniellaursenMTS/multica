@@ -580,7 +580,21 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
   const [boUnconfirmed, setBoUnconfirmed] = useState(false);
   const [created, setCreated] = useState<Issue | null>(null);
   const slug = slugify(name);
-  const names = Array.from(new Set([...people, ...(members ?? []).map((m) => m.name)])).sort((a, b) => a.localeCompare(b, "da"));
+  // Roster names win: a Multica member whose name looks like someone already in a diamond
+  // ("Daniel Laursen" vs "Daniel") is not suggested, so one person keeps one name everywhere.
+  const similar = (v: string) => {
+    const x = v.trim().toLowerCase();
+    if (!x || people.includes(v.trim())) return null;
+    const sameButCase = people.find((k) => k.toLowerCase() === x);
+    if (sameButCase) return sameButCase;
+    const first = x.split(/\s+/)[0];
+    return people.find((k) => {
+      const y = k.toLowerCase();
+      return y.split(/\s+/)[0] === first || y.startsWith(`${x} `) || x.startsWith(`${y} `);
+    }) ?? null;
+  };
+  const names = Array.from(new Set([...people, ...(members ?? []).map((m) => m.name).filter((n) => !similar(n))]))
+    .sort((a, b) => a.localeCompare(b, "da"));
   const setRole = (r: RoleCode, k: "person" | "email", v: string) =>
     setRoles((x) => {
       const next = { ...x[r], [k]: v };
@@ -658,15 +672,26 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
       </div>
       <datalist id="dia-people">{names.map((n) => <option key={n} value={n} />)}</datalist>
       <div className="grid gap-3">
-        {(["bo", "po", "plo", "to"] as RoleCode[]).map((r) => (
+        {(["bo", "po", "plo", "to"] as RoleCode[]).map((r) => {
+          const like = similar(roles[r].person);
+          return (
           <div key={r} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr] sm:items-center">
             <span className="text-sm text-muted-foreground">{ROLE_NAME[r]}</span>
             <input id={`dia-${r}`} list="dia-people" value={roles[r].person} onChange={(e) => setRole(r, "person", e.target.value)}
               className={input} placeholder="Navn — tom = ikke besat" aria-label={`${ROLE_NAME[r]}, navn`} />
             <input id={`dia-${r}-email`} type="email" value={roles[r].email} onChange={(e) => setRole(r, "email", e.target.value)}
               className={input} placeholder="Email (valgfri)" aria-label={`${ROLE_NAME[r]}, email`} />
+            {like && (
+              <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-[#9a6700] sm:col-start-2 sm:col-end-4">
+                Findes allerede som «{like}» i en anden diamant. Er det samme person, så brug samme navn — ellers bliver de to forskellige
+                personer i status, «Mine projekter» og projekt-chatten.
+                <button type="button" onClick={() => setRoles((x) => ({ ...x, [r]: { ...x[r], person: like } }))}
+                  className="rounded border px-2 py-0.5 font-medium text-foreground hover:bg-accent">Brug «{like}»</button>
+              </p>
+            )}
           </div>
-        ))}
+          );
+        })}
         <label className="flex items-center gap-2 text-sm">
           <input id="dia-bo-unconfirmed" type="checkbox" checked={boUnconfirmed} onChange={(e) => setBoUnconfirmed(e.target.checked)} />
           Business Owner skal bekræftes

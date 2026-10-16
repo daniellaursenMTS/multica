@@ -5,4 +5,4 @@ services:
     environment:
       DIAMOND_VIEWS_DIR: /data/diamond-views
     volumes:
-      - ${DIAMOND_VIEWS_HOST_DIR:-${HOME}/Documents/hermes/projects/_views}:/data/diamond-views:ro
+      - ${DIAMOND_VIEWS_HOST_DIR:-${HOME}/dev/hermes/projects/_views}:/data/diamond-views:ro

@@ -199,7 +199,7 @@ export function ProjectForm({ mode, row, project, onDone, onCancel }: {
   const preview = fieldsFromMeta(Object.fromEntries(META_KEYS.filter((k) => f[k]).map((k) => [`pf_${k}`, NUMERIC.has(k) ? Number(f[k]) : f[k]])));
   return (
     <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (f.name.trim()) save.mutate(); }}>
-      <div className="text-sm font-medium">{mode === "create" ? "Nyt projekt" : row?.intake_issue ? "Rediger felter" : "Tilføj felter"}</div>
+      <div className="text-sm font-medium">{mode === "create" ? "Nyt projekt" : "Opdater felter"}</div>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm sm:col-span-2">
           <span className="text-muted-foreground">Navn</span>
@@ -611,7 +611,7 @@ export function OverviewTab({ row, chatHref, agentName, agents, project, onMoved
           <h3 id="flds" className="text-sm font-medium">Felter</h3>
           {row.multica_project && !editing && (
             <button type="button" onClick={() => setEditing(true)} className="rounded-md border px-3 py-1 text-sm hover:bg-accent">
-              {row.intake_issue ? "Rediger" : "Tilføj felter"}
+              Opdater felter
             </button>
           )}
         </div>

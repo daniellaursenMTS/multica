@@ -42,6 +42,7 @@ export interface Row {
   dia_spec?: DiaSpec | null;
   dia_pending?: boolean;
   dia_error?: string | null;
+  dia_archived?: boolean;
 }
 export interface Portfolio { synced_at: string | null; as_of: string; rows: Row[] }
 export interface Index {
@@ -563,7 +564,7 @@ export function ProjectChatButton({ agentId, projectId }: { agentId: string; pro
 }
 
 export interface DiaSpec {
-  slug: string; name: string; aliases: string[];
+  slug: string; name: string; aliases: string[]; archived?: boolean;
   roles: Record<RoleCode, { person: string | null; confirmed?: boolean; email?: string }>;
 }
 const ROLE_CODES: RoleCode[] = ["bo", "po", "plo", "to"];
@@ -871,6 +872,61 @@ export function KnowledgeShare({ row, me, agents }: { row: Row; me: string | nul
   );
 }
 
+/** Save the diamond with a new archived flag; the sync moves the hub to or from _archive/. */
+function useSetArchived(row: Row) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (archived: boolean) => {
+      if (!row.intake_issue || !row.dia_spec) throw new Error("Projektet har ingen diamant gemt i Multica.");
+      const { archived: _old, ...rest } = row.dia_spec;
+      await api.setIssueMetadataKey(row.intake_issue, "dia_spec", JSON.stringify(archived ? { ...rest, archived: true } : rest));
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["portfolio", "live"] }),
+  });
+}
+
+/** «Arkivér diamant»: the project keeps its page and issues; the diamond, hub and sharing go out of use. */
+export function ArchiveDiamond({ row }: { row: Row }) {
+  const [confirming, setConfirming] = useState(false);
+  const set = useSetArchived(row);
+  if (!confirming) {
+    return <button type="button" onClick={() => setConfirming(true)} className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">Arkivér diamant</button>;
+  }
+  return (
+    <div className="flex basis-full flex-col gap-2 rounded-lg border p-4 text-sm">
+      <p>
+        Arkivér diamanten for <strong>{row.name}</strong>? Opus-noter til projektet bliver ikke længere sendt til hubben, rollerne får ingen
+        status eller rykkere, projekt-chatten kender ikke projektet, og en deling med Knowledge Hub stopper. Hubben med alle noter gemmes i
+        arkivet og kommer tilbage, hvis du genopretter diamanten. Projektet og dets opgaver i Multica bliver.
+      </p>
+      {set.error && <p className="text-[#CF022D]">{(set.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <button type="button" disabled={set.isPending} onClick={() => set.mutate(true)}
+          className="rounded-md bg-foreground px-3 py-1.5 font-medium text-background disabled:opacity-50">{set.isPending ? "Arkiverer …" : "Ja, arkivér"}</button>
+        <button type="button" onClick={() => setConfirming(false)} className="rounded-md border px-3 py-1.5">Annullér</button>
+      </div>
+    </div>
+  );
+}
+
+export function ArchivedDiamond({ row }: { row: Row }) {
+  const set = useSetArchived(row);
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-dashed px-4 py-3 text-sm">
+      <p className="text-muted-foreground">
+        Diamanten er arkiveret{row.dia_pending ? " (synkroniseres …)" : ""}. Hubben med noterne ligger i arkivet. Genopret den for at få roller,
+        status og projekt-chat tilbage.
+      </p>
+      {row.dia_error && <p className="text-[#CF022D]">{row.dia_error}</p>}
+      {set.error && <p className="text-[#CF022D]">{(set.error as Error).message}</p>}
+      <button type="button" disabled={set.isPending} onClick={() => set.mutate(false)}
+        className="self-start rounded-md border px-3 py-1.5 font-medium hover:bg-accent disabled:opacity-50">
+        <span className="mr-1.5 text-[#CF022D]">◇</span>{set.isPending ? "Genopretter …" : "Genopret diamant"}
+      </button>
+    </div>
+  );
+}
+
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
 export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people, rows, me }: {
   row: Row; chatAgentId: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null;
@@ -898,7 +954,8 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 
       {row.description && <p className="max-w-[75ch] whitespace-pre-line leading-relaxed">{row.description}</p>}
 
-      {(row.hub || row.dia_spec) && (
+      {row.dia_archived && <ArchivedDiamond row={row} />}
+      {(row.hub || row.dia_spec) && !row.dia_archived && (
         <div className="flex flex-wrap items-center gap-2">
           {openDiamond && (
             <button type="button" onClick={openDiamond} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
@@ -911,7 +968,7 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 
       {!row.hub && !row.dia_spec && row.multica_project && <CreateDiamond row={row} people={people} rows={rows} />}
       {!row.hub && row.dia_spec && <DiamondSyncState row={row} />}
-      {(row.hub || row.dia_spec) && row.intake_issue && <KnowledgeShare row={row} me={me} agents={agents} />}
+      {(row.hub || row.dia_spec) && !row.dia_archived && row.intake_issue && <KnowledgeShare row={row} me={me} agents={agents} />}
 
       <section className="flex flex-col gap-2" aria-labelledby="hist">
         <h3 id="hist" className="text-sm font-medium">Opgaver og historik</h3>
@@ -976,7 +1033,12 @@ export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: 
           );
         })}
       </ul>
-      {row.multica_project && <CreateDiamond key={row.dia_spec ? JSON.stringify(row.dia_spec.roles) : "none"} row={row} people={people} rows={rows} mode="roles" />}
+      {row.multica_project && (
+        <div className="flex flex-wrap items-start gap-2">
+          <CreateDiamond key={row.dia_spec ? JSON.stringify(row.dia_spec.roles) : "none"} row={row} people={people} rows={rows} mode="roles" />
+          {row.dia_spec && <ArchiveDiamond row={row} />}
+        </div>
+      )}
       {row.hub ? <Diagram url={`/diamond-views/${slug}.svg?v=${viewsKey}`} label="diamant" />
         : <p className="text-sm text-muted-foreground">Diagrammet tegnes, når diamanten er synkroniseret.</p>}
       {chatAgentId && row.hub && (
@@ -1044,7 +1106,8 @@ export function usePortfolio() {
       const extra = fieldsFromMeta(intake?.metadata);
       const spec = parseSpec(intake?.metadata.dia_spec);
       // Saved roles show at once; the activity state per person comes from the last sync.
-      const diamond = spec ? Object.fromEntries(ROLE_CODES.map((c) => {
+      const archived = !!spec?.archived;
+      const diamond = archived ? undefined : spec ? Object.fromEntries(ROLE_CODES.map((c) => {
         const v = hub?.diamond?.[c];
         const person = spec.roles[c]?.person ?? null;
         const same = v && v.person === person;
@@ -1063,7 +1126,7 @@ export function usePortfolio() {
         fields: { ...(hub?.fields ?? {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== null)) },
         multica_project: pr.id, intake_issue: intake?.id ?? null, intake_meta: intake?.metadata,
         lead_id: pr.lead_type === "member" ? pr.lead_id : null,
-        diamond, dia_spec: spec,
+        diamond, dia_spec: spec, dia_archived: archived, ...(archived ? { hub: null } : {}),
         dia_pending: !!spec && intake?.metadata.dia_spec !== intake?.metadata.dia_synced_spec,
         dia_error: typeof intake?.metadata.dia_sync_error === "string" ? intake.metadata.dia_sync_error : null,
       });

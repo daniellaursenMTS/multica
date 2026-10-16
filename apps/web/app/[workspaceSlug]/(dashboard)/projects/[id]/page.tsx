@@ -23,7 +23,7 @@ function ProjectPage({ id }: { id: string }) {
   const projectId = row?.multica_project ?? (row ? null : id);
   const tabs: [View, string][] = [["overview", "Oversigt"]];
   if (projectId) tabs.push(["kanban", "Kanban"]);
-  if (row?.hub || row?.dia_spec) tabs.push(["diamond", "Diamant"]);
+  if ((row?.hub || row?.dia_spec) && !row?.dia_archived) tabs.push(["diamond", "Diamant"]);
   const asked = params.get("view") as View | null;
   const view: View = tabs.some(([k]) => k === asked) ? (asked as View) : row || loading ? "overview" : "kanban";
   const go = (v: View) => router.push(v === "overview" ? "?" : `?view=${v}`);

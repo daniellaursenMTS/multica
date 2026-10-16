@@ -67,7 +67,7 @@ function ProjectPage({ id }: { id: string }) {
                 onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub ? () => go("diamond") : null}
                 editing={editing} setEditing={setEditing} people={people} />
             )}
-            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} />}
+            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} agents={agents} people={people} />}
           </div>
         </div>
       )}

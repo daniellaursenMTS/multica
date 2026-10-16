@@ -34,7 +34,7 @@ export interface Row {
   hub?: string | null;
   demo?: boolean;
   notes?: number;
-  diamond?: Record<RoleCode, { person: string | null; state: string; text: string }>;
+  diamond?: Record<RoleCode, { person: string | null; state: string; text: string; confirmed?: boolean }>;
   multica_project?: string | null;
   intake_issue?: string | null;
   intake_meta?: IssueMetadata;
@@ -566,7 +566,8 @@ const slugify = (x: string) =>
 
 /** «Opret diamant»: the form becomes an issue for Diamant-opretter, which runs create_diamond.py.
  *  The roster on disk is only ever changed by that script, and the request stays in the history. */
-export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent[]; people: string[] }) {
+export function CreateDiamond({ row, agents, people, mode = "create" }: { row: Row; agents: Agent[]; people: string[]; mode?: "create" | "roles" }) {
+  const editing = mode === "roles";
   const workspace = useCurrentWorkspace();
   const p = useWorkspacePaths();
   const qc = useQueryClient();
@@ -575,9 +576,11 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(row.name);
   const [aliases, setAliases] = useState("");
-  const [roles, setRoles] = useState<Record<RoleCode, { person: string; email: string }>>(
-    { bo: { person: "", email: "" }, po: { person: "", email: "" }, plo: { person: "", email: "" }, to: { person: "", email: "" } });
-  const [boUnconfirmed, setBoUnconfirmed] = useState(false);
+  const current = (r: RoleCode) => (editing ? row.diamond?.[r]?.person ?? "" : "");
+  const initial = () => Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, { person: current(r), email: "" }])) as
+    Record<RoleCode, { person: string; email: string }>;
+  const [roles, setRoles] = useState(initial);
+  const [boUnconfirmed, setBoUnconfirmed] = useState(editing && row.diamond?.bo?.confirmed === false);
   const [created, setCreated] = useState<Issue | null>(null);
   const slug = slugify(name);
   // Roster names win: a Multica member whose name looks like someone already in a diamond
@@ -605,15 +608,27 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
       return { ...x, [r]: next };
     });
   const filled = (["bo", "po", "plo", "to"] as RoleCode[]).some((r) => roles[r].person.trim());
+  const changes = (["bo", "po", "plo", "to"] as RoleCode[]).filter((r) => roles[r].person.trim() !== current(r))
+    .map((r) => `- ${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`);
+  const anyChange = !editing || changes.length > 0 || boUnconfirmed !== (row.diamond?.bo?.confirmed === false)
+    || (["bo", "po", "plo", "to"] as RoleCode[]).some((r) => roles[r].email.trim());
   const create = useMutation({
     mutationFn: () => {
-      const spec = {
-        slug, name: name.trim(), aliases: aliases.split(",").map((a) => a.trim()).filter(Boolean),
-        multica_project: row.multica_project, status: row.status, description: row.description,
-        roles: Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, {
+      const roleSpec = Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, {
           person: roles[r].person.trim() || null, ...(roles[r].email.trim() ? { email: roles[r].email.trim() } : {}),
           ...(r === "bo" && boUnconfirmed ? { confirmed: false } : {}),
-        }])),
+        }]));
+      if (editing) {
+        const spec = { action: "update_roles", slug: row.hub, multica_project: row.multica_project, roles: roleSpec };
+        return api.createIssue({
+          title: `Ret roller — ${row.name}`, project_id: row.multica_project ?? undefined, status: "todo",
+          assignee_type: "agent", assignee_id: agent!.id,
+          description: `Ret roller i diamanten for **${row.name}** fra Diamant-fanen.\n\n${changes.length ? changes.join("\n") : "Ingen personskift; kun bekræftelse eller email."}\n\nTidligere noter bliver i hubben med den, der sagde dem.\n\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`,
+        });
+      }
+      const spec = {
+        slug, name: name.trim(), aliases: aliases.split(",").map((a) => a.trim()).filter(Boolean),
+        multica_project: row.multica_project, status: row.status, description: row.description, roles: roleSpec,
       };
       const lines = (["bo", "po", "plo", "to"] as RoleCode[]).map((r) => `- ${ROLE_NAME[r]}: ${roles[r].person.trim() || "ingen"}`);
       return api.createIssue({
@@ -630,6 +645,17 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
   });
   const input = "rounded-md border bg-background px-2 py-1.5";
 
+  if (!open && editing) {
+    return created ? (
+      <p className="text-sm">
+        <AppLink href={p.issueDetail(created.id)} className="font-medium underline underline-offset-4">{created.identifier}</AppLink>{" "}
+        er sendt til {DIAMOND_AGENT_NAME}. Genindlæs siden, når den står i review.
+      </p>
+    ) : agent ? (
+      <button type="button" onClick={() => { setRoles(initial()); setOpen(true); }}
+        className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Ret roller</button>
+    ) : null;
+  }
   if (!open) {
     return (
       <div className="flex flex-col gap-2 rounded-md border border-dashed px-4 py-3 text-sm">
@@ -657,9 +683,9 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
     );
   }
   return (
-    <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (filled && slug.length > 1) create.mutate(); }}>
-      <div className="text-sm font-medium"><span className="mr-1.5 text-[#CF022D]">◇</span>Opret diamant</div>
-      <div className="grid gap-3 sm:grid-cols-2">
+    <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (filled && anyChange && (editing || slug.length > 1)) create.mutate(); }}>
+      <div className="text-sm font-medium"><span className="mr-1.5 text-[#CF022D]">◇</span>{editing ? `Ret roller — ${row.name}` : "Opret diamant"}</div>
+      {!editing && <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">Navn i Opus-noter</span>
           <input id="dia-name" required value={name} onChange={(e) => setName(e.target.value)} className={input} />
@@ -669,7 +695,7 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
           <span className="text-muted-foreground">Andre navne (komma-separeret)</span>
           <input id="dia-aliases" value={aliases} onChange={(e) => setAliases(e.target.value)} className={input} placeholder="Fx en forkortelse" />
         </label>
-      </div>
+      </div>}
       <datalist id="dia-people">{names.map((n) => <option key={n} value={n} />)}</datalist>
       <div className="grid gap-3">
         {(["bo", "po", "plo", "to"] as RoleCode[]).map((r) => {
@@ -699,13 +725,15 @@ export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent
       </div>
       <p className="text-xs text-muted-foreground">
         En tom rolle dækkes af Platform Owner, indtil den er besat. Email kobler personens Multica-login til rollen, så projekt-chatten
-        ved, hvem der spørger. {DIAMOND_AGENT_NAME} opretter diamanten og skriver i opgaven, når den er klar.
+        ved, hvem der spørger. {DIAMOND_AGENT_NAME} {editing ? "retter rollerne" : "opretter diamanten"} og skriver i opgaven, når den er klar.
+        {editing && " Tidligere noter bliver i hubben med den, der sagde dem; den nye person får sin egen status fra sin første note."}
       </p>
+      {editing && changes.length > 0 && <ul className="text-sm">{changes.map((c) => <li key={c}>{c.slice(2)}</li>)}</ul>}
       {create.error && <p className="text-sm text-[#CF022D]">Kunne ikke oprette opgaven: {(create.error as Error).message}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={!filled || slug.length < 2 || create.isPending}
+        <button type="submit" disabled={!filled || !anyChange || (!editing && slug.length < 2) || create.isPending}
           className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
-          {create.isPending ? "Sender …" : "Opret diamant"}
+          {create.isPending ? "Sender …" : editing ? "Ret roller" : "Opret diamant"}
         </button>
         <button type="button" onClick={() => setOpen(false)} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
       </div>
@@ -790,7 +818,7 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 }
 
 /** Diamant-fanen: de fire roller, hvornår hver sidst har opdateret, og diagrammet. */
-export function DiamondTab({ row, chatAgentId }: { row: Row; chatAgentId: string | null }) {
+export function DiamondTab({ row, chatAgentId, agents, people }: { row: Row; chatAgentId: string | null; agents: Agent[]; people: string[] }) {
   if (!row.hub) {
     return (
       <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
@@ -814,6 +842,7 @@ export function DiamondTab({ row, chatAgentId }: { row: Row; chatAgentId: string
           );
         })}
       </ul>
+      {row.multica_project && <CreateDiamond row={row} agents={agents} people={people} mode="roles" />}
       <Diagram url={`/diamond-views/${row.hub}.svg`} label="diamant" />
       {chatAgentId && (
         <div className="flex flex-wrap items-center gap-3">

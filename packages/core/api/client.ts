@@ -1,4 +1,3 @@
-import { NotificationScheduleResponseSchema, type NotificationScheduleInput, type NotificationScheduleResponse } from "../notification-preferences/schedule";
 import { configStore } from "../config";
 import type {
   Issue,
@@ -2553,20 +2552,6 @@ export class ApiClient {
       EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
       { endpoint: "PATCH /api/notification-preferences" },
     );
-  }
-
-  async getNotificationSchedule(workspaceSlug: string): Promise<NotificationScheduleResponse> {
-    const raw = await this.fetch<unknown>("/api/notification-schedule", { headers: workspaceHeader(workspaceSlug) });
-    const parsed = parseWithFallback<NotificationScheduleResponse | null>(raw, NotificationScheduleResponseSchema, null, { endpoint: "GET /api/notification-schedule" });
-    if (!parsed) throw new Error("Could not read the notification schedule.");
-    return parsed;
-  }
-
-  async updateNotificationSchedule(input: NotificationScheduleInput, workspaceSlug: string): Promise<NotificationScheduleResponse> {
-    const raw = await this.fetch<unknown>("/api/notification-schedule", { method: "PATCH", headers: workspaceHeader(workspaceSlug), body: JSON.stringify(input) });
-    const parsed = parseWithFallback<NotificationScheduleResponse | null>(raw, NotificationScheduleResponseSchema, null, { endpoint: "PATCH /api/notification-schedule" });
-    if (!parsed || !parsed.schedule) throw new Error("The server did not confirm the notification schedule.");
-    return parsed;
   }
 
   // App Config

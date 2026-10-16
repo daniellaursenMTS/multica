@@ -15,7 +15,10 @@ function ProjectPage({ id }: { id: string }) {
   const router = useRouter();
   const params = useSearchParams();
   const p = useWorkspacePaths();
-  const { find, project, loading, agents, agentName, chatAgentId } = usePortfolio();
+  const { find, project, loading, agents, agentName, chatAgentId, index, rows } = usePortfolio();
+  // Name suggestions for a new diamond: real people only — never the fictional demo cast.
+  const demoHubs = new Set(rows.filter((r) => r.demo && r.hub).map((r) => r.hub as string));
+  const people = (index?.people ?? []).filter((x) => x.roles.some((r) => !demoHubs.has(r.project))).map((x) => x.name);
   const row = find(id);
   const projectId = row?.multica_project ?? (row ? null : id);
   const tabs: [View, string][] = [["overview", "Oversigt"]];
@@ -62,7 +65,7 @@ function ProjectPage({ id }: { id: string }) {
             {row && view === "overview" && (
               <OverviewTab row={row} chatAgentId={chatAgentId} agentName={agentName} agents={agents} project={project(row)}
                 onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub ? () => go("diamond") : null}
-                editing={editing} setEditing={setEditing} />
+                editing={editing} setEditing={setEditing} people={people} />
             )}
             {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} />}
           </div>

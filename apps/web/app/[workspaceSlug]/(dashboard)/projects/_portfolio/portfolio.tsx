@@ -559,10 +559,139 @@ export function ProjectChatButton({ agentId, projectId }: { agentId: string; pro
   return <AppLink href={href} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Chat med projektet →</AppLink>;
 }
 
+const DIAMOND_AGENT_NAME = "Diamant-opretter";
+const slugify = (x: string) =>
+  x.toLowerCase().replace(/æ/g, "ae").replace(/ø/g, "oe").replace(/å/g, "aa")
+    .normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 41);
+
+/** «Opret diamant»: the form becomes an issue for Diamant-opretter, which runs create_diamond.py.
+ *  The roster on disk is only ever changed by that script, and the request stays in the history. */
+export function CreateDiamond({ row, agents, people }: { row: Row; agents: Agent[]; people: string[] }) {
+  const workspace = useCurrentWorkspace();
+  const p = useWorkspacePaths();
+  const qc = useQueryClient();
+  const { data: members } = useQuery({ ...memberListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });
+  const agent = agents.find((a) => !a.archived_at && a.name === DIAMOND_AGENT_NAME);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(row.name);
+  const [aliases, setAliases] = useState("");
+  const [roles, setRoles] = useState<Record<RoleCode, { person: string; email: string }>>(
+    { bo: { person: "", email: "" }, po: { person: "", email: "" }, plo: { person: "", email: "" }, to: { person: "", email: "" } });
+  const [boUnconfirmed, setBoUnconfirmed] = useState(false);
+  const [created, setCreated] = useState<Issue | null>(null);
+  const slug = slugify(name);
+  const names = Array.from(new Set([...people, ...(members ?? []).map((m) => m.name)])).sort((a, b) => a.localeCompare(b, "da"));
+  const setRole = (r: RoleCode, k: "person" | "email", v: string) =>
+    setRoles((x) => {
+      const next = { ...x[r], [k]: v };
+      if (k === "person" && !x[r].email) {
+        const m = members?.find((mm) => mm.name.toLowerCase() === v.trim().toLowerCase());
+        if (m) next.email = m.email;
+      }
+      return { ...x, [r]: next };
+    });
+  const filled = (["bo", "po", "plo", "to"] as RoleCode[]).some((r) => roles[r].person.trim());
+  const create = useMutation({
+    mutationFn: () => {
+      const spec = {
+        slug, name: name.trim(), aliases: aliases.split(",").map((a) => a.trim()).filter(Boolean),
+        multica_project: row.multica_project, status: row.status, description: row.description,
+        roles: Object.fromEntries((["bo", "po", "plo", "to"] as RoleCode[]).map((r) => [r, {
+          person: roles[r].person.trim() || null, ...(roles[r].email.trim() ? { email: roles[r].email.trim() } : {}),
+          ...(r === "bo" && boUnconfirmed ? { confirmed: false } : {}),
+        }])),
+      };
+      const lines = (["bo", "po", "plo", "to"] as RoleCode[]).map((r) => `- ${ROLE_NAME[r]}: ${roles[r].person.trim() || "ingen"}`);
+      return api.createIssue({
+        title: `Opret diamant — ${name.trim()}`, project_id: row.multica_project ?? undefined, status: "todo",
+        assignee_type: "agent", assignee_id: agent!.id,
+        description: `Opret diamant for **${name.trim()}** fra projektsiden.\n\n${lines.join("\n")}\n\nOpus-noter med «Projekt: ${name.trim()}» går derefter til hubben \`projects/${slug}\`.\n\n\`\`\`json\n${JSON.stringify(spec, null, 2)}\n\`\`\`\n`,
+      });
+    },
+    onSuccess: (issue) => {
+      setCreated(issue);
+      setOpen(false);
+      if (row.multica_project) qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", row.multica_project] });
+    },
+  });
+  const input = "rounded-md border bg-background px-2 py-1.5";
+
+  if (!open) {
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-dashed px-4 py-3 text-sm">
+        {created ? (
+          <p>
+            <AppLink href={p.issueDetail(created.id)} className="font-medium underline underline-offset-4">{created.identifier}</AppLink>{" "}
+            er sendt til {DIAMOND_AGENT_NAME}. Genindlæs siden, når den står i review, så kommer fanen Diamant.
+          </p>
+        ) : (
+          <>
+            <p className="text-muted-foreground">
+              Projektet har ingen diamant. Med en diamant får Business Owner, Product Owner, Platform Owner og Technical Owner hver deres
+              status, Opus-noter samles i en hub, og projekt-chatten kan svare om projektet.
+            </p>
+            {agent ? (
+              <button type="button" onClick={() => setOpen(true)} className="self-start rounded-md border px-3 py-1.5 font-medium hover:bg-accent">
+                <span className="mr-1.5 text-[#CF022D]">◇</span>Opret diamant
+              </button>
+            ) : (
+              <p className="text-xs text-muted-foreground">Agenten «{DIAMOND_AGENT_NAME}» findes ikke i workspacet.</p>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+  return (
+    <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (filled && slug.length > 1) create.mutate(); }}>
+      <div className="text-sm font-medium"><span className="mr-1.5 text-[#CF022D]">◇</span>Opret diamant</div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">Navn i Opus-noter</span>
+          <input id="dia-name" required value={name} onChange={(e) => setName(e.target.value)} className={input} />
+          <span className="text-xs text-muted-foreground">Noter starter med «Projekt: {name.trim() || "…"}». Mappe: projects/{slug || "…"}</span>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">Andre navne (komma-separeret)</span>
+          <input id="dia-aliases" value={aliases} onChange={(e) => setAliases(e.target.value)} className={input} placeholder="Fx en forkortelse" />
+        </label>
+      </div>
+      <datalist id="dia-people">{names.map((n) => <option key={n} value={n} />)}</datalist>
+      <div className="grid gap-3">
+        {(["bo", "po", "plo", "to"] as RoleCode[]).map((r) => (
+          <div key={r} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr] sm:items-center">
+            <span className="text-sm text-muted-foreground">{ROLE_NAME[r]}</span>
+            <input id={`dia-${r}`} list="dia-people" value={roles[r].person} onChange={(e) => setRole(r, "person", e.target.value)}
+              className={input} placeholder="Navn — tom = ikke besat" aria-label={`${ROLE_NAME[r]}, navn`} />
+            <input id={`dia-${r}-email`} type="email" value={roles[r].email} onChange={(e) => setRole(r, "email", e.target.value)}
+              className={input} placeholder="Email (valgfri)" aria-label={`${ROLE_NAME[r]}, email`} />
+          </div>
+        ))}
+        <label className="flex items-center gap-2 text-sm">
+          <input id="dia-bo-unconfirmed" type="checkbox" checked={boUnconfirmed} onChange={(e) => setBoUnconfirmed(e.target.checked)} />
+          Business Owner skal bekræftes
+        </label>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        En tom rolle dækkes af Platform Owner, indtil den er besat. Email kobler personens Multica-login til rollen, så projekt-chatten
+        ved, hvem der spørger. {DIAMOND_AGENT_NAME} opretter diamanten og skriver i opgaven, når den er klar.
+      </p>
+      {create.error && <p className="text-sm text-[#CF022D]">Kunne ikke oprette opgaven: {(create.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={!filled || slug.length < 2 || create.isPending}
+          className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
+          {create.isPending ? "Sender …" : "Opret diamant"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
+      </div>
+    </form>
+  );
+}
+
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
-export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing }: {
+export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people }: {
   row: Row; chatAgentId: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null;
-  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void;
+  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void; people: string[];
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -596,6 +725,8 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
           {row.hub && chatAgentId && <ProjectChatButton agentId={chatAgentId} projectId={row.multica_project ?? null} />}
         </div>
       )}
+
+      {!row.hub && row.multica_project && <CreateDiamond row={row} agents={agents} people={people} />}
 
       <section className="flex flex-col gap-2" aria-labelledby="hist">
         <h3 id="hist" className="text-sm font-medium">Opgaver og historik</h3>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, use } from "react";
+import { Suspense, use, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { AppLink } from "@multica/views/navigation";
@@ -24,6 +24,7 @@ function ProjectPage({ id }: { id: string }) {
   const asked = params.get("view") as View | null;
   const view: View = tabs.some(([k]) => k === asked) ? (asked as View) : row || loading ? "overview" : "kanban";
   const go = (v: View) => router.push(v === "overview" ? "?" : `?view=${v}`);
+  const [editing, setEditing] = useState(false);
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
@@ -35,6 +36,12 @@ function ProjectPage({ id }: { id: string }) {
             {row?.name ?? project(row)?.title ?? (loading ? "…" : "Projekt")}
           </h1>
           {row?.demo && <span className="rounded bg-muted px-1.5 py-0.5 text-xs uppercase">demo</span>}
+          {row?.multica_project && !editing && (
+            <button type="button" onClick={() => { setEditing(true); if (view !== "overview") go("overview"); }}
+              className="rounded-md border px-3 py-1 text-sm font-medium hover:bg-accent">
+              Opdater felter
+            </button>
+          )}
         </div>
         <nav className="-mb-px flex gap-4 text-sm" aria-label="Projektvisning">
           {tabs.map(([k, label]) => (
@@ -54,7 +61,8 @@ function ProjectPage({ id }: { id: string }) {
             {!row && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter projekt" />}
             {row && view === "overview" && (
               <OverviewTab row={row} chatHref={chatHref} agentName={agentName} agents={agents} project={project(row)}
-                onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub ? () => go("diamond") : null} />
+                onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub ? () => go("diamond") : null}
+                editing={editing} setEditing={setEditing} />
             )}
             {row && view === "diamond" && <DiamondTab row={row} chatHref={chatHref} />}
           </div>

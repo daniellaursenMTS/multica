@@ -551,13 +551,15 @@ export function MoveToMultica({ row, onMoved }: { row: Row; onMoved: (projectId:
 }
 
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
-export function OverviewTab({ row, chatHref, agentName, agents, project, onMoved, openDiamond }: {
+export function OverviewTab({ row, chatHref, agentName, agents, project, onMoved, openDiamond, editing, setEditing }: {
   row: Row; chatHref: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null;
-  onMoved: (projectId: string) => void; openDiamond: (() => void) | null;
+  onMoved: (projectId: string) => void; openDiamond: (() => void) | null; editing: boolean; setEditing: (v: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(false);
   return (
     <div className="flex flex-col gap-6">
+      {editing && row.multica_project && (
+        <ProjectForm mode="edit" row={row} project={project} onCancel={() => setEditing(false)} onDone={() => setEditing(false)} />
+      )}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm sm:grid-cols-[max-content_1fr_max-content_1fr]">
         <dt className="text-muted-foreground">Status</dt><dd><StatusPill status={row.status} color={row.status_color} /></dd>
         <dt className="text-muted-foreground">Ansvarlig</dt>
@@ -607,19 +609,7 @@ export function OverviewTab({ row, chatHref, agentName, agents, project, onMoved
       </section>
 
       <section aria-labelledby="flds">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <h3 id="flds" className="text-sm font-medium">Felter</h3>
-          {row.multica_project && !editing && (
-            <button type="button" onClick={() => setEditing(true)} className="rounded-md border px-3 py-1 text-sm hover:bg-accent">
-              Opdater felter
-            </button>
-          )}
-        </div>
-        {editing && (
-          <div className="mb-3">
-            <ProjectForm mode="edit" row={row} project={project} onCancel={() => setEditing(false)} onDone={() => setEditing(false)} />
-          </div>
-        )}
+        <h3 id="flds" className="mb-2 text-sm font-medium">Felter</h3>
         {row.source === "clickup" && (
           <p className="mb-2 text-xs text-muted-foreground">Felterne kommer fra ClickUp og redigeres der, indtil projektet flyttes til Multica.</p>
         )}

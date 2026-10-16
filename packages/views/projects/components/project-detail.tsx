@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
+import { Check, ChevronRight, Gem, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -483,6 +483,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             leaf={<span className="truncate font-medium text-foreground">{project.title}</span>}
             actions={
               <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                title="Projektdata, diamant og historik i Portfolio"
+                onClick={() => router.push(`${wsPaths.diamonds()}?project=${projectId}`)}
+              >
+                <Gem />
+                Portfolio
+              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"

@@ -726,7 +726,7 @@ function PortfolioPage() {
   const me = index && email ? index.accounts[email.toLowerCase()] ?? null : null;
   const [person, setPerson] = useState<string | null>(null);
   const current = index?.people.find((x) => x.name === (person ?? me)) ?? index?.people[0] ?? null;
-  const row = rows.find((r) => r.id === selected) ?? null;
+  const row = rows.find((r) => r.id === selected) ?? rows.find((r) => selected && r.multica_project === selected) ?? null;
   const rowProject = live?.projects.find((x) => x.id === row?.multica_project) ?? null;
 
   return (

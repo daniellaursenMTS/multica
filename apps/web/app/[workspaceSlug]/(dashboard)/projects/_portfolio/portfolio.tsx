@@ -927,6 +927,107 @@ export function ArchivedDiamond({ row }: { row: Row }) {
   );
 }
 
+const ORCHESTRATOR_NAME = "Orchestrator";
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+/** «Tilføj opdatering»: a written update from someone in the diamond goes the same way as an Opus
+ *  note — Orchestrator, GDPR gate, Hub-skriver — so it is screened before it reaches the hub. */
+export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
+  const p = useWorkspacePaths();
+  const qc = useQueryClient();
+  const orchestrator = agents.find((a) => !a.archived_at && a.name === ORCHESTRATOR_NAME);
+  const people = Array.from(new Set(ROLE_CODES.map((r) => row.dia_spec?.roles[r]?.person ?? row.diamond?.[r]?.person ?? null)
+    .filter((x): x is string => !!x)));
+  const roleOf = (n: string) => ROLE_CODES.filter((r) => (row.dia_spec?.roles[r]?.person ?? row.diamond?.[r]?.person) === n).map((r) => ROLE_NAME[r]).join(", ");
+  const [open, setOpen] = useState(false);
+  const [who, setWho] = useState("");
+  const [other, setOther] = useState("");
+  const [day, setDay] = useState(today);
+  const [text, setText] = useState("");
+  const [sent, setSent] = useState<Issue | null>(null);
+  const speaker = (who === "__other" ? other : who).trim();
+  const projectName = row.dia_spec?.name ?? row.name;
+  const send = useMutation({
+    mutationFn: async () => {
+      if (!orchestrator) throw new Error(`Agenten «${ORCHESTRATOR_NAME}» findes ikke.`);
+      const issue = await api.createIssue({
+        title: `Opdatering: ${projectName} — ${speaker}, ${day}`, project_id: row.multica_project ?? undefined, status: "backlog",
+        assignee_type: "agent", assignee_id: orchestrator.id, allow_duplicate: true,
+        description: `Projekt: ${projectName} · Taler: ${speaker} · Dato: ${day}\n\n${text.trim()}\n`,
+      });
+      // The same markers an Opus note carries, set before the run starts.
+      await api.setIssueMetadataKey(issue.id, "intake_source", "opus_mcp");
+      await api.setIssueMetadataKey(issue.id, "gdpr_review_only", true);
+      await api.setIssueMetadataKey(issue.id, "intake_request_id", crypto.randomUUID());
+      await api.setIssueMetadataKey(issue.id, "note_source", "project_page");
+      await api.updateIssue(issue.id, { status: "todo" });
+      return issue;
+    },
+    onSuccess: (issue) => {
+      setSent(issue); setOpen(false); setText(""); setWho(""); setOther(""); setDay(today());
+      if (row.multica_project) qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", row.multica_project] });
+    },
+  });
+  const input = "rounded-md border bg-background px-2 py-1.5";
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={() => { setOpen(true); setSent(null); }} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
+          + Tilføj opdatering
+        </button>
+        {sent && (
+          <span className="text-sm text-muted-foreground">
+            <AppLink href={p.issueDetail(sent.id)} className="font-medium text-foreground underline underline-offset-4">{sent.identifier}</AppLink>{" "}
+            screenes af GDPR-gaten og lægges i hubben om et par minutter.
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (speaker && text.trim()) send.mutate(); }}>
+      <div className="text-sm font-medium">Tilføj opdatering til {projectName}</div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">Hvem kom opdateringen fra?</span>
+          <select id="upd-who" required value={who} onChange={(e) => setWho(e.target.value)} className={input}>
+            <option value="">Vælg …</option>
+            {people.map((n) => <option key={n} value={n}>{n} ({roleOf(n)})</option>)}
+            <option value="__other">En anden</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">Hvornår fik du den?</span>
+          <input id="upd-day" type="date" required value={day} max={today()} onChange={(e) => setDay(e.target.value)} className={input} />
+        </label>
+        {who === "__other" && (
+          <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+            <span className="text-muted-foreground">Navn</span>
+            <input id="upd-other" value={other} onChange={(e) => setOther(e.target.value)} className={input} />
+            <span className="text-xs text-muted-foreground">Uden for diamanten: noten kommer i hubben, men tæller ikke som en rolles opdatering.</span>
+          </label>
+        )}
+        <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span className="text-muted-foreground">Opdateringen</span>
+          <textarea id="upd-text" required rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
+            placeholder="Indsæt mailen eller skriv, hvad du fik at vide. Den screenes af GDPR-gaten, før noget kommer i hubben." />
+        </label>
+      </div>
+      {send.error && <p className="text-sm text-[#CF022D]">Kunne ikke sende: {(send.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={!speaker || !text.trim() || !day || send.isPending}
+          className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
+          {send.isPending ? "Sender …" : "Send til hubben"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
+      </div>
+    </form>
+  );
+}
+
 /** Oversigt-fanen: projektets data, beskrivelse, opgaver og historik. */
 export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMoved, openDiamond, editing, setEditing, people, rows, me }: {
   row: Row; chatAgentId: string | null; agentName: (id: string | null) => string; agents: Agent[]; project: Project | null;
@@ -974,7 +1075,10 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
         <h3 id="hist" className="text-sm font-medium">Opgaver og historik</h3>
         {row.multica_project ? (
           <>
-            <NewTask projectId={row.multica_project} projectName={row.name} agents={agents} />
+            <div className="flex flex-col gap-3">
+              <NewTask projectId={row.multica_project} projectName={row.name} agents={agents} />
+              {row.hub && !row.dia_archived && <AddUpdate row={row} agents={agents} />}
+            </div>
             <History projectId={row.multica_project} agentName={agentName} />
           </>
         ) : (

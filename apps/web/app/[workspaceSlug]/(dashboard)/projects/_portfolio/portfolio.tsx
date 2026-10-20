@@ -595,9 +595,11 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
   const current = (r: RoleCode) => (editing ? row.dia_spec?.roles[r]?.person ?? row.diamond?.[r]?.person ?? "" : "");
   const initial = () => Object.fromEntries(ROLE_CODES.map((r) => [r, { person: current(r), email: "" }])) as
     Record<RoleCode, { person: string; email: string }>;
-  const wasUnconfirmed = editing && (row.dia_spec?.roles.bo?.confirmed === false || row.diamond?.bo?.confirmed === false);
+  // Which roles hold a person who is not confirmed yet; any role can be marked.
+  const wasUnconfirmed = () => Object.fromEntries(ROLE_CODES.map((r) => [r, editing &&
+    (row.dia_spec?.roles[r]?.confirmed === false || (!row.dia_spec && row.diamond?.[r]?.confirmed === false))])) as Record<RoleCode, boolean>;
   const [roles, setRoles] = useState(initial);
-  const [boUnconfirmed, setBoUnconfirmed] = useState(wasUnconfirmed);
+  const [unconfirmed, setUnconfirmed] = useState(wasUnconfirmed);
   const slug = editing ? row.dia_spec?.slug ?? row.hub ?? "" : slugify(name);
   // Roster names win: a Multica member whose name looks like someone already in a diamond
   // ("Daniel Laursen" vs "Daniel") is not suggested, so one person keeps one name everywhere.
@@ -626,7 +628,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
   const filled = ROLE_CODES.some((r) => roles[r].person.trim());
   const changes = ROLE_CODES.filter((r) => roles[r].person.trim() !== current(r))
     .map((r) => `${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`);
-  const anyChange = !editing || changes.length > 0 || boUnconfirmed !== wasUnconfirmed || ROLE_CODES.some((r) => roles[r].email.trim());
+  const anyChange = !editing || changes.length > 0 || ROLE_CODES.some((r) => unconfirmed[r] !== wasUnconfirmed()[r]) || ROLE_CODES.some((r) => roles[r].email.trim());
   // Checks the sync would refuse, shown before saving. The sync checks again.
   const slugTaken = !editing && rows.some((r) => r.id !== row.id && (r.hub === slug || r.dia_spec?.slug === slug));
   const nameTaken = !editing && rows.find((r) => r.id !== row.id && (r.hub || r.dia_spec) &&
@@ -643,7 +645,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
         aliases: editing ? row.dia_spec?.aliases ?? [] : aliases.split(",").map((a) => a.trim()).filter(Boolean),
         roles: Object.fromEntries(ROLE_CODES.map((r) => [r, {
           person: roles[r].person.trim() || null, ...(roles[r].email.trim() ? { email: roles[r].email.trim().toLowerCase() } : {}),
-          ...(r === "bo" && boUnconfirmed && roles[r].person.trim() ? { confirmed: false } : {}),
+          ...(unconfirmed[r] && roles[r].person.trim() ? { confirmed: false } : {}),
         }])) as DiaSpec["roles"],
       };
       let intake = row.intake_issue ?? null;
@@ -663,7 +665,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
 
   if (!open && editing) {
     return (
-      <button type="button" onClick={() => { setRoles(initial()); setBoUnconfirmed(wasUnconfirmed); setOpen(true); }}
+      <button type="button" onClick={() => { setRoles(initial()); setUnconfirmed(wasUnconfirmed()); setOpen(true); }}
         className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Ret roller</button>
     );
   }
@@ -699,14 +701,19 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
         {ROLE_CODES.map((r) => {
           const like = similar(roles[r].person);
           return (
-          <div key={r} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr] sm:items-center">
+          <div key={r} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr_auto] sm:items-center">
             <span className="text-sm text-muted-foreground">{ROLE_NAME[r]}</span>
             <input id={`dia-${r}`} list="dia-people" value={roles[r].person} onChange={(e) => setRole(r, "person", e.target.value)}
               className={input} placeholder="Navn — tom = ikke besat" aria-label={`${ROLE_NAME[r]}, navn`} />
             <input id={`dia-${r}-email`} type="email" value={roles[r].email} onChange={(e) => setRole(r, "email", e.target.value)}
               className={input} placeholder="Email (valgfri)" aria-label={`${ROLE_NAME[r]}, email`} />
+            <label className="flex items-center gap-2 whitespace-nowrap text-sm text-muted-foreground">
+              <input id={`dia-${r}-unconfirmed`} type="checkbox" checked={unconfirmed[r]} disabled={!roles[r].person.trim()}
+                onChange={(e) => setUnconfirmed((x) => ({ ...x, [r]: e.target.checked }))} />
+              Skal bekræftes
+            </label>
             {like && (
-              <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-[#9a6700] sm:col-start-2 sm:col-end-4">
+              <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-[#9a6700] sm:col-start-2 sm:col-end-5">
                 Findes allerede som «{like}» i en anden diamant. Er det samme person, så brug samme navn — ellers bliver de to forskellige
                 personer i status, «Mine projekter» og projekt-chatten.
                 <button type="button" onClick={() => setRoles((x) => ({ ...x, [r]: { ...x[r], person: like } }))}
@@ -716,13 +723,9 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
           </div>
           );
         })}
-        <label className="flex items-center gap-2 text-sm">
-          <input id="dia-bo-unconfirmed" type="checkbox" checked={boUnconfirmed} onChange={(e) => setBoUnconfirmed(e.target.checked)} />
-          Business Owner skal bekræftes
-        </label>
       </div>
       <p className="text-xs text-muted-foreground">
-        En tom rolle dækkes af Platform Owner, indtil den er besat. Email kobler personens Multica-login til rollen, så projekt-chatten
+        En tom rolle dækkes af Platform Owner, indtil den er besat. «Skal bekræftes» markerer en person, der endnu ikke har sagt ja til rollen. Email kobler personens Multica-login til rollen, så projekt-chatten
         ved, hvem der spørger. Gemmes med det samme; hub og status følger med inden for et minut.
         {editing && " Tidligere noter bliver i hubben med den, der sagde dem; den nye person får sin egen status fra sin første note."}
       </p>

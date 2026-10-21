@@ -137,6 +137,7 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     issues: () => "/acme/issues",
     projects: () => "/acme/projects",
     diamonds: () => "/acme/diamonds",
+    team: () => "/acme/team",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
     squads: () => "/acme/squads",
@@ -185,6 +186,7 @@ vi.mock("@multica/core/workspace/queries", () => ({
   workspaceKeys: { myInvitations: () => ["invitations"] },
   workspaceListOptions: () => ({ queryKey: ["workspaces"] }),
   agentListOptions: (wsId: string) => ({ queryKey: ["agents", wsId] }),
+  memberListOptions: (wsId: string) => ({ queryKey: ["members", wsId] }),
 }));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),

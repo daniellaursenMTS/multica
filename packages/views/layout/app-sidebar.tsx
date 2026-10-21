@@ -65,7 +65,7 @@ import {
   useActiveIssueViewStore,
 } from "@multica/core/issue-views/active-view-store";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
-import { workspaceListOptions, myInvitationListOptions, workspaceKeys, agentListOptions } from "@multica/core/workspace/queries";
+import { workspaceListOptions, myInvitationListOptions, workspaceKeys, agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inboxKeys, deduplicateInboxItems, inboxUnreadSummaryOptions, hasOtherWorkspaceUnread, unreadWorkspaceIds } from "@multica/core/inbox/queries";
@@ -119,6 +119,7 @@ type NavKey =
   | "issues"
   | "projects"
   | "diamonds"
+  | "team"
   | "autopilots"
   | "agents"
   | "squads"
@@ -136,6 +137,7 @@ type NavLabelKey =
   | "issues"
   | "projects"
   | "diamonds"
+  | "team"
   | "autopilots"
   | "agents"
   | "squads"
@@ -162,6 +164,7 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey }[] = [
 const workNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "issues", labelKey: "issues" },
   { key: "projects", labelKey: "projects" },
+  { key: "team", labelKey: "team" },
   { key: "autopilots", labelKey: "autopilots" },
 ];
 
@@ -469,6 +472,9 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     ...agentListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
+  // Team is an admin page: shown to workspace owners and admins only.
+  const { data: members } = useQuery({ ...memberListOptions(wsId ?? ""), enabled: !!wsId });
+  const isWorkspaceAdmin = !!members?.some((m) => m.user_id === userId && (m.role === "owner" || m.role === "admin"));
   const intakeAgent = React.useMemo(
     () =>
       intakeAgents?.find(
@@ -895,7 +901,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.work_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workNav.map((item) => {
+                {workNav.filter((item) => item.key !== "team" || isWorkspaceAdmin).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = !isActivePinnedRoute && isNavActive(pathname, href);

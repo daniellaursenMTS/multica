@@ -52,7 +52,7 @@ function ProjectList() {
               ))}
             </nav>
             {isAdmin && (
-              <a href={`${p.projects()}/team`} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Team</a>
+              <a href={p.team()} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Team</a>
             )}
             {!creating && (
               <button type="button" onClick={() => setCreating(true)} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">

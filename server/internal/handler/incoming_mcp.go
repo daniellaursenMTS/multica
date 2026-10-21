@@ -104,11 +104,11 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 		if !supportedIncomingMCPVersion(version) {
 			version = incomingMCPVersion
 		}
-		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "multica-intake", "version": "1.0.0"}, "instructions": "Submit selected text as an issue for the Orchestrator. Content is stored in the Multica workspace. Receipts report routing and GDPR review decisions; submission itself is not approval."})
+		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.1.0"}, "instructions": "Matas' Multica workspace: projects and their diamonds of leaders, what project owners share, updates to a project (screened by the GDPR gate), and tasks for agents. Questions and tasks are answered asynchronously: poll multica_get_issue. Submitting is not approval; a person decides when work is done."})
 	case "ping":
 		mcpRPCResult(w, msg.ID, map[string]any{})
 	case "tools/list":
-		mcpRPCResult(w, msg.ID, map[string]any{"tools": incomingMCPTools()})
+		mcpRPCResult(w, msg.ID, map[string]any{"tools": append(incomingMCPTools(), matasMCPTools()...)})
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -125,6 +125,18 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 			result, err = h.mcpSubmitIssue(r, p.Arguments)
 		case "multica_get_issue":
 			result, err = h.mcpGetIssue(r, p.Arguments)
+		case "multica_list_projects":
+			result, err = h.mcpListProjects(r, p.Arguments)
+		case "multica_list_agents":
+			result, err = h.mcpListAgents(r, p.Arguments)
+		case "multica_project_summary":
+			result, err = h.mcpProjectSummary(r, p.Arguments)
+		case "multica_ask_project":
+			result, err = h.mcpAskProject(r, p.Arguments)
+		case "multica_add_project_update":
+			result, err = h.mcpAddProjectUpdate(r, p.Arguments)
+		case "multica_create_task":
+			result, err = h.mcpCreateTask(r, p.Arguments)
 		default:
 			mcpRPCError(w, msg.ID, -32602, "unknown tool")
 			return
@@ -269,7 +281,7 @@ func (h *Handler) mcpIssueReceipt(r *http.Request, issue db.Issue) map[string]an
 		metadata = map[string]json.RawMessage{}
 	}
 	safe := map[string]json.RawMessage{}
-	for _, key := range []string{"intake_source", "intake_request_id", "intake_route", "intake_route_reason", "gdpr_check"} {
+	for _, key := range []string{"intake_source", "intake_request_id", "intake_route", "intake_route_reason", "gdpr_check", "mcp_kind", "hub_project"} {
 		if v, ok := metadata[key]; ok {
 			safe[key] = v
 		}
@@ -280,7 +292,11 @@ func (h *Handler) mcpIssueReceipt(r *http.Request, issue db.Issue) map[string]an
 			assignee = agent.Name
 		}
 	}
-	return map[string]any{"id": util.UUIDToString(issue.ID), "identifier": fmt.Sprintf("%s-%d", h.getIssuePrefix(r.Context(), issue.WorkspaceID), issue.Number), "status": issue.Status, "assignee_id": util.UUIDToString(issue.AssigneeID), "assignee": assignee, "metadata": safe, "updated_at": issue.UpdatedAt.Time}
+	receipt := map[string]any{"id": util.UUIDToString(issue.ID), "identifier": fmt.Sprintf("%s-%d", h.getIssuePrefix(r.Context(), issue.WorkspaceID), issue.Number), "status": issue.Status, "assignee_id": util.UUIDToString(issue.AssigneeID), "assignee": assignee, "metadata": safe, "updated_at": issue.UpdatedAt.Time}
+	if answer := h.matasAnswer(r, issue); answer != "" {
+		receipt["answer"] = answer
+	}
+	return receipt
 }
 
 // Extension callers still require a personal token and workspace membership.

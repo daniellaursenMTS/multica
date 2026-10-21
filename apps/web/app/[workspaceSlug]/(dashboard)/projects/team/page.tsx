@@ -68,6 +68,49 @@ function Rename({ person, people, onDone }: { person: Person; people: string[]; 
   );
 }
 
+const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+/** Change or remove the login a person is linked to. Written on one of the person's diamonds;
+ *  the sync moves the link in roster.json and drops the old address. */
+function EmailEdit({ person, taken, onDone }: { person: Person; taken: Map<string, string>; onDone: () => void }) {
+  const qc = useQueryClient();
+  const [email, setEmail] = useState(person.email ?? "");
+  const next = email.trim().toLowerCase();
+  const holder = next ? taken.get(next) : undefined;
+  const problem = next && !EMAIL_RE.test(next) ? "Det ligner ikke en email-adresse."
+    : holder && holder !== person.name ? `Den er allerede koblet til ${holder}.` : null;
+  const seat = person.seats.find((s) => !s.row.demo && s.row.intake_issue && s.row.dia_spec) ?? person.seats.find((s) => s.row.intake_issue && s.row.dia_spec);
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!seat?.row.intake_issue || !seat.row.dia_spec) throw new Error("Personen er ikke i en diamant, der kan rettes.");
+      const spec: DiaSpec = JSON.parse(JSON.stringify(seat.row.dia_spec));
+      const v = spec.roles[seat.role] as Record<string, unknown>;
+      delete v.email; delete v.email_drop; delete v.rename_from;
+      if (next) v.email = next;
+      if (person.email && person.email !== next) v.email_drop = person.email;
+      await api.setIssueMetadataKey(seat.row.intake_issue, "dia_spec", JSON.stringify(spec));
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["portfolio", "live"] }); onDone(); },
+  });
+  const changed = next !== (person.email ?? "");
+  return (
+    <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (changed && !problem) save.mutate(); }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <input id={`team-email-${person.name}`} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus
+          className="rounded-md border bg-background px-2 py-1.5 text-sm" placeholder="navn@matas.dk" aria-label="Email" />
+        <button type="submit" disabled={!changed || !!problem || save.isPending}
+          className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
+          {save.isPending ? "Gemmer …" : next ? "Gem email" : "Fjern login"}
+        </button>
+        <button type="button" onClick={onDone} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
+      </div>
+      {problem && <p className="text-xs text-[#CF022D]">{problem}</p>}
+      {!next && person.email && <p className="text-xs text-muted-foreground">Uden login kan projekt-chatten ikke se, hvem der spørger.</p>}
+      {save.error && <p className="text-xs text-[#CF022D]">Kunne ikke gemme: {(save.error as Error).message}</p>}
+    </form>
+  );
+}
+
 export default function TeamPage() {
   const workspace = useCurrentWorkspace();
   const p = useWorkspacePaths();
@@ -76,6 +119,8 @@ export default function TeamPage() {
   const isAdmin = !!members?.some((m) => m.user_id === myId && (m.role === "owner" || m.role === "admin"));
   const { rows, index, loading } = usePortfolio();
   const [editing, setEditing] = useState<string | null>(null);
+  const [editingEmail, setEditingEmail] = useState<string | null>(null);
+  const taken = useMemo(() => new Map(Object.entries(index?.accounts ?? {}).map(([e, n]) => [e.toLowerCase(), n])), [index]);
 
   const people = useMemo<Person[]>(() => {
     const emailOf = new Map(Object.entries(index?.accounts ?? {}).map(([e, n]) => [n, e]));
@@ -114,7 +159,7 @@ export default function TeamPage() {
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full min-w-[820px] text-sm">
             <thead className="text-left text-xs text-muted-foreground">
-              <tr className="border-b"><th className="px-3 py-2 font-medium">Person</th><th className="px-3 py-2 font-medium">Projekter og roller</th><th className="px-3 py-2 font-medium">Login</th><th className="px-3 py-2" /></tr>
+              <tr className="border-b"><th className="px-3 py-2 font-medium">Person</th><th className="px-3 py-2 font-medium">Projekter og roller</th><th className="px-3 py-2 font-medium">Login (email)</th><th className="px-3 py-2" /></tr>
             </thead>
             <tbody>
               {people.map((person) => {
@@ -141,7 +186,18 @@ export default function TeamPage() {
                         ))}
                       </ul>
                     </td>
-                    <td className="px-3 py-3 text-muted-foreground">{person.email ?? "—"}</td>
+                    <td className="px-3 py-3 text-muted-foreground">
+                      {editingEmail === person.name ? (
+                        <EmailEdit person={person} taken={taken} onDone={() => setEditingEmail(null)} />
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{person.email ?? "—"}</span>
+                          <button type="button" onClick={() => setEditingEmail(person.name)} className="rounded-md border px-2 py-0.5 text-xs text-foreground hover:bg-accent">
+                            {person.email ? "Ret" : "Tilføj"}
+                          </button>
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-right">
                       {editing !== person.name && (
                         <button type="button" onClick={() => setEditing(person.name)} className="rounded-md border px-3 py-1 text-sm hover:bg-accent">Ret navn</button>
@@ -154,7 +210,7 @@ export default function TeamPage() {
           </table>
         </div>
         <p className="text-xs text-muted-foreground">
-          Noter, personen allerede har sendt, står i hubben under det navn, de blev sendt med. Logins kobles i «Ret roller» på projektets Diamant-fane.
+          Noter, personen allerede har sendt, står i hubben under det navn, de blev sendt med. Et login kobler personens Multica-konto til rollen, så projekt-chatten ved, hvem der spørger.
         </p>
       </div>
     </div>

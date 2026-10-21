@@ -2,10 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
-import { useAuthStore } from "@multica/core/auth";
-import { memberListOptions } from "@multica/core/workspace/queries";
-import { useQuery } from "@tanstack/react-query";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { ProjectsPage } from "@multica/views/projects/components";
 import { Diagram, Overview, ProjectForm, usePortfolio } from "./_portfolio/portfolio";
 
@@ -16,10 +13,6 @@ function ProjectList() {
   const params = useSearchParams();
   const p = useWorkspacePaths();
   const { pf, index, rows, me, isMine, error, loading } = usePortfolio();
-  const workspace = useCurrentWorkspace();
-  const myId = useAuthStore((s) => s.user?.id ?? null);
-  const { data: members } = useQuery({ ...memberListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });
-  const isAdmin = !!members?.some((m) => m.user_id === myId && (m.role === "owner" || m.role === "admin"));
   const [creating, setCreating] = useState(false);
   const mine = params.get("filter") === "mine";
   const open = (id: string) => router.push(p.projectDetail(id));
@@ -51,9 +44,6 @@ function ProjectList() {
                 </button>
               ))}
             </nav>
-            {isAdmin && (
-              <a href={p.team()} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Team</a>
-            )}
             {!creating && (
               <button type="button" onClick={() => setCreating(true)} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
                 + Nyt projekt

@@ -1,4 +1,7 @@
 "use client";
+import { loadUsage } from "./capex-usage-api";
+import { usageTotal, usageToday, daysBefore, type CapexManual } from "./capex-usage";
+export type { CapexDay, CapexManual } from "./capex-usage";
 
 import { useEffect, useMemo, useState } from "react";
 import { useAuthStore } from "@multica/core/auth";
@@ -155,13 +158,11 @@ function emptyForm(row?: Row | null, project?: Project | null): PfForm {
 // a project points at one by its stable id in pf_capex on its intake issue. Admins edit the list
 // on the Capex page; ids never change, so renaming a number keeps its projects.
 // Manual entries carry usage Multica never saw (e.g. Claude Code sessions that built the setup),
-// day by day so the period filter works; matas-ai-automation/capex/claude_code_usage.py keeps the
-// Claude Code entries current. An entry with project_id follows that project's Capex.
+// as monthly history and 45 days of daily detail in separate completed issues. Shared importers
+// keep Claude Code and Codex entries current. An entry with project_id follows that project's Capex.
 export interface CapexItem { id: string; number: string; description: string; active: boolean }
-export interface CapexDay { date: string; tokens: number; usd: number }
-export interface CapexManual { id: string; capex_id: string | null; project_id?: string | null; label: string; note?: string; days: CapexDay[] }
-export interface CapexCatalog { usd_dkk: number; items: CapexItem[]; manual?: CapexManual[] }
-const EMPTY_CAPEX: CapexCatalog = { usd_dkk: 6.9, items: [], manual: [] };
+export interface CapexCatalog { usd_dkk: number; items: CapexItem[] }
+const EMPTY_CAPEX: CapexCatalog = { usd_dkk: 6.9, items: [] };
 
 export function useCapex() {
   const workspace = useCurrentWorkspace();
@@ -169,14 +170,15 @@ export function useCapex() {
     queryKey: ["capex", workspace?.id],
     enabled: !!workspace?.id,
     queryFn: async () => {
-      const res = await api.listIssues({ metadata: { capex_register: true }, limit: 1 });
+      const [res, manual] = await Promise.all([api.listIssues({ metadata: { capex_register: true }, limit: 2 }), loadUsage()]);
+      if (res.issues.length > 1) throw new Error("Dubleret Capex-register");
       const issue = res.issues[0] ?? null;
       let catalog = EMPTY_CAPEX;
       try {
         const raw = issue?.metadata.capex_catalog;
         if (typeof raw === "string") catalog = { ...EMPTY_CAPEX, ...JSON.parse(raw) };
-      } catch { /* unreadable: start empty */ }
-      return { issueId: issue?.id ?? null, ...catalog };
+      } catch { throw new Error("Capex-registret kunne ikke læses"); }
+      return { issueId: issue?.id ?? null, ...catalog, manual };
     },
   });
 }
@@ -188,7 +190,7 @@ export async function saveCapex(issueId: string | null, catalog: CapexCatalog): 
       description: "Capex-numre for projekterne. Redigeres på Capex-siden i Multica; ret ikke metadata i hånden." })).id;
     await api.setIssueMetadataKey(id, "capex_register", true);
   }
-  await api.setIssueMetadataKey(id, "capex_catalog", JSON.stringify(catalog));
+  await api.setIssueMetadataKey(id, "capex_catalog", JSON.stringify({ items: catalog.items, usd_dkk: catalog.usd_dkk }));
   return id;
 }
 
@@ -356,13 +358,15 @@ function useProjectUsage(rows: Row[], manual: CapexManual[]) {
     })),
   });
   return useMemo(() => {
-    const from = new Date(Date.now() - (USAGE_DAYS - 1) * 86_400_000).toISOString().slice(0, 10);
+    const to = usageToday();
+    const from = daysBefore(to, USAGE_DAYS - 1);
     const out = new Map<string, { tokens: number; usd: number }>();
     ids.forEach((pid, i) => {
       const data = res[i]?.data as DashboardUsageDaily[] | undefined;
-      if (!data) return;
-      const u = data.filter((d) => d.date >= from).reduce((a, d) => ({ tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0 });
-      manual.filter((m) => m.project_id === pid).forEach((m) => m.days.filter((d) => d.date >= from).forEach((d) => { u.tokens += d.tokens; u.usd += d.usd; }));
+      const u = (data ?? []).filter((d) => d.date >= from && d.date <= to).reduce((a, d) => ({ tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0 });
+      manual.filter((m) => m.project_id === pid).forEach((m) => {
+        const extra = usageTotal(m, from, to); u.tokens += extra.tokens; u.usd += extra.usd;
+      });
       out.set(pid, u);
     });
     return out;
@@ -384,6 +388,7 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
   const th = "px-3 py-2 text-center font-medium";
   return (
     <div className="overflow-x-auto rounded-lg border">
+      {capex.error && <p role="alert" className="p-3 text-sm text-destructive">Forbrugsposter kunne ikke hentes: {capex.error.message}</p>}
       <table className="w-full min-w-[980px] table-fixed text-sm">
         <colgroup>
           <col className="w-[27%]" /><col className="w-[9%]" /><col className="w-[12%]" />{hasUsage && <col className="w-[14%]" />}

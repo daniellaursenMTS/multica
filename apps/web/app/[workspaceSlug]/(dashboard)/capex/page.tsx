@@ -9,7 +9,10 @@ import type { DashboardUsageDaily } from "@multica/core/types";
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { saveCapex, useCapex, usePortfolio, type CapexDay, type CapexItem, type CapexManual } from "../projects/_portfolio/portfolio";
+import { saveCapex, useCapex, usePortfolio, type CapexDay, type CapexItem } from "../projects/_portfolio/portfolio";
+
+import { compactUsage, usageToday, usageTotal, type CapexManual, type UsageDraft } from "../projects/_portfolio/capex-usage";
+import { saveUsage, removeUsage } from "../projects/_portfolio/capex-usage-api";
 
 // Capex (admins only): agent token use per Capex number, from Multica's own usage records. A
 // project's usage is every agent run on its issues; a project points at a Capex number on its
@@ -103,7 +106,8 @@ function spread(from: string, to: string, tokens: number, usd: number): CapexDay
   return days.map((date) => ({ date, tokens: tokens / days.length, usd: usd / days.length }));
 }
 
-function ManualForm({ items, rate, onSave, onCancel, busy }: { items: CapexItem[]; rate: number; onSave: (m: CapexManual) => void; onCancel: () => void; busy: boolean }) {
+function ManualForm({ items, rate, onSave, onCancel, busy }: { items: CapexItem[]; rate: number; onSave: (m: UsageDraft) => void; onCancel: () => void; busy: boolean }) {
+  const [entryId] = useState(() => crypto.randomUUID());
   const [label, setLabel] = useState("");
   const [capexId, setCapexId] = useState("");
   const [from, setFrom] = useState(iso(new Date()));
@@ -111,11 +115,11 @@ function ManualForm({ items, rate, onSave, onCancel, busy }: { items: CapexItem[
   const [tokens, setTokens] = useState("");
   const [kr, setKr] = useState("");
   const input = "rounded-md border bg-background px-2 py-1.5 text-sm";
-  const ok = label.trim() && from && to && from <= to && (Number(tokens) > 0 || Number(kr) > 0);
+  const ok = label.trim() && from && to && from <= to && to <= usageToday() && (Number(tokens) > 0 || Number(kr) > 0);
   return (
     <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => {
       e.preventDefault();
-      if (ok) onSave({ id: crypto.randomUUID(), capex_id: capexId || null, label: label.trim(), days: spread(from, to, Number(tokens) || 0, (Number(kr) || 0) / rate) });
+      if (ok) onSave({ id: entryId, capex_id: capexId || null, label: label.trim(), days: spread(from, to, Number(tokens) || 0, (Number(kr) || 0) / rate) });
     }}>
       <input id="manual-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Hvad er det?" aria-label="Post" className={`${input} min-w-48 flex-1`} autoFocus />
       <select id="manual-capex" value={capexId} onChange={(e) => setCapexId(e.target.value)} aria-label="Capex" className={input}>
@@ -123,7 +127,7 @@ function ManualForm({ items, rate, onSave, onCancel, busy }: { items: CapexItem[
         {items.filter((c) => c.active).map((c) => <option key={c.id} value={c.id}>{c.number} · {c.description}</option>)}
       </select>
       <input id="manual-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Fra" className={input} />
-      <input id="manual-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Til" className={input} />
+      <input id="manual-to" type="date" max={usageToday()} value={to} onChange={(e) => setTo(e.target.value)} aria-label="Til" className={input} />
       <input id="manual-tokens" type="number" min="0" value={tokens} onChange={(e) => setTokens(e.target.value)} placeholder="Tokens" aria-label="Tokens" className={`${input} w-32`} />
       <input id="manual-kr" type="number" min="0" value={kr} onChange={(e) => setKr(e.target.value)} placeholder="Kr." aria-label="Kroner" className={`${input} w-28`} />
       <button type="submit" disabled={!ok || busy} className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">{busy ? "Gemmer …" : "Gem"}</button>
@@ -181,8 +185,7 @@ export default function CapexPage() {
       tokens: Math.max(0, all.tokens - inProjects.tokens), usd: Math.max(0, all.usd - inProjects.usd), color: "var(--cx-noproj)", special: true };
     let manual = 0;
     (capex.data?.manual ?? []).forEach((m) => {
-      const u = m.days.filter((d) => d.date >= period.from && d.date <= period.to)
-        .reduce((a, d) => ({ tokens: a.tokens + d.tokens, usd: a.usd + d.usd }), { tokens: 0, usd: 0 });
+      const u = usageTotal(m, period.from, period.to);
       if (!u.tokens && !u.usd) return;
       const owner = m.project_id ? projects.find((r) => r.multica_project === m.project_id) : undefined;
       const target = byCapex.get(String(owner ? owner.fields.capex_id ?? "" : m.capex_id ?? "")) ?? none;
@@ -194,8 +197,8 @@ export default function CapexPage() {
   }, [capex.data, projects, usage, period]);
 
   const save = useMutation({
-    mutationFn: async (next: { items?: CapexItem[]; usd_dkk?: number; manual?: CapexManual[] }) =>
-      saveCapex(capex.data?.issueId ?? null, { usd_dkk: next.usd_dkk ?? rate, items: next.items ?? items, manual: next.manual ?? manualEntries }),
+    mutationFn: async (next: { items?: CapexItem[]; usd_dkk?: number }) =>
+      saveCapex(capex.data?.issueId ?? null, { usd_dkk: next.usd_dkk ?? rate, items: next.items ?? items }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["capex"] }); setEditing(null); },
   });
   const items = capex.data?.items ?? [];
@@ -203,7 +206,14 @@ export default function CapexPage() {
   const upsert = (id: string | null, number: string, description: string) =>
     save.mutate({ items: id ? items.map((x) => (x.id === id ? { ...x, number, description } : x)) : [...items, { id: crypto.randomUUID(), number, description, active: true }] });
   const toggle = (id: string) => save.mutate({ items: items.map((x) => (x.id === id ? { ...x, active: !x.active } : x)) });
-  const setManual = (manual: CapexManual[]) => save.mutate({ manual });
+  const usageSave = useMutation({
+    mutationFn: async (action: { entry: CapexManual | UsageDraft; remove?: boolean }) => {
+      const entry = "months" in action.entry ? action.entry : compactUsage(action.entry);
+      return action.remove ? removeUsage(entry) : saveUsage(entry);
+    },
+    onSuccess: () => { setEditing(null); },
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["capex"] }); },
+  });
 
   if (membersLoading) return <div className="p-6"><div className="h-64 animate-pulse rounded-lg bg-muted" /></div>;
   if (!isAdmin) return <div className="p-6 text-sm text-muted-foreground">Capex er kun for administratorer af workspacet.</div>;
@@ -229,6 +239,8 @@ export default function CapexPage() {
           </label>
         </header>
 
+        {capex.error && <p role="alert" className="text-sm text-[#CF022D]">Kunne ikke hente forbrug: {capex.error.message}</p>}
+        {usageSave.error && <p role="alert" className="text-sm text-[#CF022D]">Kunne ikke gemme forbrug: {usageSave.error.message}</p>}
         <section className="grid gap-3 sm:grid-cols-3" aria-label="Nøgletal">
           {[["Tokens", nfTokens.format(total), "input og output"], ["Anslået pris", nfKr.format(totalUsd * rate), `listepris, kurs ${rate.toLocaleString("da-DK")}`], ["Uden Capex", pct(uncovered), "uden Capex eller projekt"]].map(([k, v, s]) => (
             <div key={k} className="rounded-lg border px-4 py-3">
@@ -306,20 +318,20 @@ export default function CapexPage() {
             </div>
             {editing !== "manual" && <button type="button" onClick={() => setEditing("manual")} className="shrink-0 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">+ Manuel post</button>}
           </div>
-          {editing === "manual" && <ManualForm items={items} rate={rate} onSave={(m) => setManual([...manualEntries, m])} onCancel={() => setEditing(null)} busy={save.isPending} />}
+          {editing === "manual" && <ManualForm items={items} rate={rate} onSave={(m) => usageSave.mutate({ entry: m })} onCancel={() => setEditing(null)} busy={usageSave.isPending} />}
           {manualEntries.length > 0 && (
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full min-w-[720px] text-sm">
                 <thead className="text-left text-xs text-muted-foreground">
                   <tr className="border-b">
-                    <th className="px-3 py-2 font-medium">Post</th><th className="px-3 py-2 font-medium">Capex</th><th className="px-3 py-2 font-medium">Dage</th>
+                    <th className="px-3 py-2 font-medium">Post</th><th className="px-3 py-2 font-medium">Capex</th><th className="px-3 py-2 font-medium">Måneder</th>
                     <th className="px-3 py-2 text-right font-medium">Tokens i alt</th><th className="px-3 py-2 text-right font-medium">Anslået pris i alt</th><th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
                   {manualEntries.map((m) => {
-                    const dates = m.days.map((d) => d.date).sort();
-                    const t = m.days.reduce((a, d) => ({ tokens: a.tokens + d.tokens, usd: a.usd + d.usd }), { tokens: 0, usd: 0 });
+                    const dates = Object.keys(m.months).sort();
+                    const t = usageTotal(m);
                     return (
                       <tr key={m.id} className="border-b align-top last:border-0">
                         <td className="px-3 py-2"><div className="font-medium">{m.label}</div>{m.note && <div className="text-xs text-muted-foreground">{m.note}</div>}</td>
@@ -329,8 +341,8 @@ export default function CapexPage() {
                             const cx = items.find((c) => c.id === owner?.fields.capex_id);
                             return <span className="text-sm">{cx ? `${cx.number} · ${cx.description}` : "Intet Capex"}<span className="block text-xs text-muted-foreground">følger {owner?.name ?? "projektet"}</span></span>;
                           })() : (
-                          <select id={`manual-capex-${m.id}`} value={m.capex_id ?? ""} disabled={save.isPending} aria-label={`Capex for ${m.label}`}
-                            onChange={(e) => setManual(manualEntries.map((x) => (x.id === m.id ? { ...x, capex_id: e.target.value || null } : x)))}
+                          <select id={`manual-capex-${m.id}`} value={m.capex_id ?? ""} disabled={usageSave.isPending} aria-label={`Capex for ${m.label}`}
+                            onChange={(e) => usageSave.mutate({ entry: { ...m, capex_id: e.target.value || null } })}
                             className="rounded-md border bg-background px-2 py-1 text-sm">
                             <option value="">Intet Capex</option>
                             {items.filter((c) => c.active || c.id === m.capex_id).map((c) => <option key={c.id} value={c.id}>{c.number} · {c.description}</option>)}
@@ -340,7 +352,7 @@ export default function CapexPage() {
                         <td className="px-3 py-2 text-right tabular-nums">{nfTokens.format(t.tokens)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{nfKr.format(t.usd * rate)}</td>
                         <td className="px-3 py-2 text-right">
-                          <button type="button" disabled={save.isPending} onClick={() => { if (confirm(`Fjern «${m.label}»?`)) setManual(manualEntries.filter((x) => x.id !== m.id)); }}
+                          <button type="button" disabled={usageSave.isPending} onClick={() => { if (confirm(`Fjern «${m.label}»?`)) usageSave.mutate({ entry: m, remove: true }); }}
                             className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">Fjern</button>
                         </td>
                       </tr>

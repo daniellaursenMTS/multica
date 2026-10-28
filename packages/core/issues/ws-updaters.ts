@@ -638,6 +638,9 @@ export function onIssueMetadataChanged(
   metadata: IssueMetadata,
   revision?: number,
 ) {
+  if (metadata.capex_usage || metadata.capex_register || "pf_capex" in metadata) {
+    qc.invalidateQueries({ queryKey: ["capex", wsId] });
+  }
   if (refetchForUnversionedIssueEvent(qc, wsId, issueId, revision)) return;
   if (
     isOlderThanRecordedAuxiliaryProjection(
@@ -759,6 +762,7 @@ export function onIssueDeleted(
   issueId: string,
 ) {
   cleanupDeletedIssueCaches(qc, wsId, issueId);
+  qc.invalidateQueries({ queryKey: ["capex", wsId] });
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });

@@ -1124,3 +1124,23 @@ describe("project gantt cache invalidation", () => {
     expectInvalidated(qc, issueKeys.projectGantt(WS_ID, PROJECT_ID));
   });
 });
+
+
+describe("Capex usage projections", () => {
+  it("refreshes the workspace Capex query after external usage and allocation edits", () => {
+    for (const metadata of [{ capex_usage: true }, { capex_register: true }, { pf_capex: "1000" }]) {
+      const client = new QueryClient();
+      client.setQueryData(["capex", WS_ID], { manual: [] });
+      client.setQueryData(["capex", "other"], { manual: [] });
+      onIssueMetadataChanged(client, WS_ID, ISSUE_ID, metadata);
+      expect(client.getQueryState(["capex", WS_ID])?.isInvalidated).toBe(true);
+      expect(client.getQueryState(["capex", "other"])?.isInvalidated).toBe(false);
+    }
+  });
+  it("refreshes usage after a peer deletes an issue", () => {
+    const client = new QueryClient();
+    client.setQueryData(["capex", WS_ID], { manual: [] });
+    onIssueDeleted(client, WS_ID, ISSUE_ID);
+    expect(client.getQueryState(["capex", WS_ID])?.isInvalidated).toBe(true);
+  });
+});

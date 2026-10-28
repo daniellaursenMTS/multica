@@ -153,9 +153,14 @@ function emptyForm(row?: Row | null, project?: Project | null): PfForm {
 // The Capex numbers live as one JSON value (capex_catalog) on a dedicated «Capex-register» issue;
 // a project points at one by its stable id in pf_capex on its intake issue. Admins edit the list
 // on the Capex page; ids never change, so renaming a number keeps its projects.
+// Manual entries carry usage Multica never saw (e.g. Claude Code sessions that built the setup),
+// day by day so the period filter works; matas-ai-automation/capex/claude_code_usage.py keeps the
+// Claude Code entry current.
 export interface CapexItem { id: string; number: string; description: string; active: boolean }
-export interface CapexCatalog { usd_dkk: number; items: CapexItem[] }
-const EMPTY_CAPEX: CapexCatalog = { usd_dkk: 6.9, items: [] };
+export interface CapexDay { date: string; tokens: number; usd: number }
+export interface CapexManual { id: string; capex_id: string | null; label: string; note?: string; days: CapexDay[] }
+export interface CapexCatalog { usd_dkk: number; items: CapexItem[]; manual?: CapexManual[] }
+const EMPTY_CAPEX: CapexCatalog = { usd_dkk: 6.9, items: [], manual: [] };
 
 export function useCapex() {
   const workspace = useCurrentWorkspace();

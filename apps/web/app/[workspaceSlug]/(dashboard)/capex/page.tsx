@@ -9,12 +9,13 @@ import type { DashboardUsageDaily } from "@multica/core/types";
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { saveCapex, useCapex, usePortfolio, type CapexItem } from "../projects/_portfolio/portfolio";
+import { saveCapex, useCapex, usePortfolio, type CapexDay, type CapexItem, type CapexManual } from "../projects/_portfolio/portfolio";
 
 // Capex (admins only): agent token use per Capex number, from Multica's own usage records. A
 // project's usage is every agent run on its issues; a project points at a Capex number on its
 // intake issue. Tokens = input + output (cache reads are priced, not counted). Kroner are an
 // estimate from list prices: runs on a ChatGPT or Claude subscription have no real price per call.
+// Manual entries add usage Multica never saw (the Claude Code sessions that built this setup).
 
 // Categorical slots, validated for colour-blind separation on light and dark surfaces. A Capex
 // keeps its colour by its place in the register, never by its rank in the chart.
@@ -95,6 +96,42 @@ function ItemForm({ item, onSave, onCancel, busy }: { item?: CapexItem; onSave: 
   );
 }
 
+// A hand-entered amount is spread evenly over the days it covers, so the period filter can cut it.
+function spread(from: string, to: string, tokens: number, usd: number): CapexDay[] {
+  const days: string[] = [];
+  for (let d = new Date(`${from}T12:00:00`); iso(d) <= to; d.setDate(d.getDate() + 1)) days.push(iso(d));
+  return days.map((date) => ({ date, tokens: tokens / days.length, usd: usd / days.length }));
+}
+
+function ManualForm({ items, rate, onSave, onCancel, busy }: { items: CapexItem[]; rate: number; onSave: (m: CapexManual) => void; onCancel: () => void; busy: boolean }) {
+  const [label, setLabel] = useState("");
+  const [capexId, setCapexId] = useState("");
+  const [from, setFrom] = useState(iso(new Date()));
+  const [to, setTo] = useState(iso(new Date()));
+  const [tokens, setTokens] = useState("");
+  const [kr, setKr] = useState("");
+  const input = "rounded-md border bg-background px-2 py-1.5 text-sm";
+  const ok = label.trim() && from && to && from <= to && (Number(tokens) > 0 || Number(kr) > 0);
+  return (
+    <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => {
+      e.preventDefault();
+      if (ok) onSave({ id: crypto.randomUUID(), capex_id: capexId || null, label: label.trim(), days: spread(from, to, Number(tokens) || 0, (Number(kr) || 0) / rate) });
+    }}>
+      <input id="manual-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Hvad er det?" aria-label="Post" className={`${input} min-w-48 flex-1`} autoFocus />
+      <select id="manual-capex" value={capexId} onChange={(e) => setCapexId(e.target.value)} aria-label="Capex" className={input}>
+        <option value="">Intet Capex</option>
+        {items.filter((c) => c.active).map((c) => <option key={c.id} value={c.id}>{c.number} · {c.description}</option>)}
+      </select>
+      <input id="manual-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Fra" className={input} />
+      <input id="manual-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Til" className={input} />
+      <input id="manual-tokens" type="number" min="0" value={tokens} onChange={(e) => setTokens(e.target.value)} placeholder="Tokens" aria-label="Tokens" className={`${input} w-32`} />
+      <input id="manual-kr" type="number" min="0" value={kr} onChange={(e) => setKr(e.target.value)} placeholder="Kr." aria-label="Kroner" className={`${input} w-28`} />
+      <button type="submit" disabled={!ok || busy} className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">{busy ? "Gemmer …" : "Gem"}</button>
+      <button type="button" onClick={onCancel} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
+    </form>
+  );
+}
+
 export default function CapexPage() {
   const workspace = useCurrentWorkspace();
   const p = useWorkspacePaths();
@@ -142,19 +179,30 @@ export default function CapexPage() {
     const all = sum(inPeriod(usage[0]?.data));
     const noProject: Line = { key: "noproject", number: "Uden projekt", description: "Intake, chats og opgaver, der ikke ligger i et projekt", projects: [],
       tokens: Math.max(0, all.tokens - inProjects.tokens), usd: Math.max(0, all.usd - inProjects.usd), color: "var(--cx-noproj)", special: true };
+    let manual = 0;
+    (capex.data?.manual ?? []).forEach((m) => {
+      const u = m.days.filter((d) => d.date >= period.from && d.date <= period.to)
+        .reduce((a, d) => ({ tokens: a.tokens + d.tokens, usd: a.usd + d.usd }), { tokens: 0, usd: 0 });
+      if (!u.tokens && !u.usd) return;
+      const target = byCapex.get(m.capex_id ?? "") ?? none;
+      target.tokens += u.tokens; target.usd += u.usd; target.projects.push(`${m.label} (manuel)`);
+      manual += u.tokens;
+    });
     const list = [...byCapex.values()].sort((a, b) => b.tokens - a.tokens);
-    return { lines: [...list, none, noProject], total: Math.max(all.tokens, inProjects.tokens) };
+    return { lines: [...list, none, noProject], total: Math.max(all.tokens, inProjects.tokens) + manual };
   }, [capex.data, projects, usage, period]);
 
   const save = useMutation({
-    mutationFn: async (next: { items: CapexItem[]; usd_dkk?: number }) =>
-      saveCapex(capex.data?.issueId ?? null, { usd_dkk: next.usd_dkk ?? rate, items: next.items }),
+    mutationFn: async (next: { items?: CapexItem[]; usd_dkk?: number; manual?: CapexManual[] }) =>
+      saveCapex(capex.data?.issueId ?? null, { usd_dkk: next.usd_dkk ?? rate, items: next.items ?? items, manual: next.manual ?? manualEntries }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["capex"] }); setEditing(null); },
   });
   const items = capex.data?.items ?? [];
+  const manualEntries = capex.data?.manual ?? [];
   const upsert = (id: string | null, number: string, description: string) =>
     save.mutate({ items: id ? items.map((x) => (x.id === id ? { ...x, number, description } : x)) : [...items, { id: crypto.randomUUID(), number, description, active: true }] });
   const toggle = (id: string) => save.mutate({ items: items.map((x) => (x.id === id ? { ...x, active: !x.active } : x)) });
+  const setManual = (manual: CapexManual[]) => save.mutate({ manual });
 
   if (membersLoading) return <div className="p-6"><div className="h-64 animate-pulse rounded-lg bg-muted" /></div>;
   if (!isAdmin) return <div className="p-6 text-sm text-muted-foreground">Capex er kun for administratorer af workspacet.</div>;
@@ -249,8 +297,57 @@ export default function CapexPage() {
           {!items.length && <p className="text-sm text-muted-foreground">Ingen Capex-numre endnu. Opret det første med «+ Nyt Capex».</p>}
         </section>
 
+        <section className="flex flex-col gap-2" aria-labelledby="capex-manual">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 id="capex-manual" className="text-sm font-medium">Manuelle poster</h2>
+              <p className="text-xs text-muted-foreground">Forbrug, Multica ikke selv har målt, fx Claude Code-sessionerne, der byggede opsætningen. Tæller med i Capex-linjen og i perioden.</p>
+            </div>
+            {editing !== "manual" && <button type="button" onClick={() => setEditing("manual")} className="shrink-0 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">+ Manuel post</button>}
+          </div>
+          {editing === "manual" && <ManualForm items={items} rate={rate} onSave={(m) => setManual([...manualEntries, m])} onCancel={() => setEditing(null)} busy={save.isPending} />}
+          {manualEntries.length > 0 && (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead className="text-left text-xs text-muted-foreground">
+                  <tr className="border-b">
+                    <th className="px-3 py-2 font-medium">Post</th><th className="px-3 py-2 font-medium">Capex</th><th className="px-3 py-2 font-medium">Dage</th>
+                    <th className="px-3 py-2 text-right font-medium">Tokens i alt</th><th className="px-3 py-2 text-right font-medium">Anslået pris i alt</th><th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {manualEntries.map((m) => {
+                    const dates = m.days.map((d) => d.date).sort();
+                    const t = m.days.reduce((a, d) => ({ tokens: a.tokens + d.tokens, usd: a.usd + d.usd }), { tokens: 0, usd: 0 });
+                    return (
+                      <tr key={m.id} className="border-b align-top last:border-0">
+                        <td className="px-3 py-2"><div className="font-medium">{m.label}</div>{m.note && <div className="text-xs text-muted-foreground">{m.note}</div>}</td>
+                        <td className="px-3 py-2">
+                          <select id={`manual-capex-${m.id}`} value={m.capex_id ?? ""} disabled={save.isPending} aria-label={`Capex for ${m.label}`}
+                            onChange={(e) => setManual(manualEntries.map((x) => (x.id === m.id ? { ...x, capex_id: e.target.value || null } : x)))}
+                            className="rounded-md border bg-background px-2 py-1 text-sm">
+                            <option value="">Intet Capex</option>
+                            {items.filter((c) => c.active || c.id === m.capex_id).map((c) => <option key={c.id} value={c.id}>{c.number} · {c.description}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{dates.length ? `${dates.at(0)} – ${dates.at(-1)} (${dates.length})` : "—"}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{nfTokens.format(t.tokens)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{nfKr.format(t.usd * rate)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button type="button" disabled={save.isPending} onClick={() => { if (confirm(`Fjern «${m.label}»?`)) setManual(manualEntries.filter((x) => x.id !== m.id)); }}
+                            className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">Fjern</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
         <footer className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          <span>Tokens tæller input og output; cache-læsninger indgår kun i prisen. Prisen er et skøn ud fra modellernes listepriser; kørsler på et ChatGPT- eller Claude-abonnement har ingen faktisk pris pr. kald. Et lukket Capex kan ikke vælges på nye projekter, men står stadig i statistikken.</span>
+          <span>Tokens tæller input og output; cache-læsninger og -skrivninger indgår kun i prisen. Prisen er et skøn ud fra modellernes listepriser; kørsler på et ChatGPT- eller Claude-abonnement har ingen faktisk pris pr. kald. Et lukket Capex kan ikke vælges på nye projekter, men står stadig i statistikken.</span>
           <label className="flex items-center gap-2">Kurs USD→DKK
             <input id="capex-rate" type="number" step="0.01" min="1" defaultValue={rate} key={rate}
               onBlur={(e) => { const v = Number(e.target.value); if (v > 0 && v !== rate) save.mutate({ items, usd_dkk: v }); }}

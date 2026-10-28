@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
-import type { Agent, Issue, IssueMetadata, IssueMetadataValue, Project, ProjectStatus } from "@multica/core/types";
+import type { Agent, DashboardUsageDaily, Issue, IssueMetadata, IssueMetadataValue, Project, ProjectStatus } from "@multica/core/types";
 import { issueKeys } from "@multica/core/issues/queries";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { AppLink } from "@multica/views/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { estimateCost } from "@multica/views/runtimes";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 // Projects (Matas): every Multica project plus the ClickUp intake in one list, grouped by status
 // like ClickUp. A project page has Oversigt, Kanban (Multica's own view) and Diamant.
@@ -334,66 +335,144 @@ export function Avatars({ people }: { people: Row["assignees"] }) {
   );
 }
 
+const PRIORITY_DOT: Record<string, string> = { urgent: "bg-red-500", high: "bg-orange-500", medium: "bg-amber-400", low: "bg-sky-500" };
+const nfTokens = new Intl.NumberFormat("da-DK", { notation: "compact", maximumFractionDigits: 1 });
+const nfKr = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK", maximumFractionDigits: 0 });
+const USAGE_DAYS = 30;
+
+/** Agent use per project over the last 30 days, from Multica's usage records (same query and cache
+ *  as the Capex page). Tokens = input + output; kroner are a list-price estimate. */
+function useProjectUsage(rows: Row[]) {
+  const workspace = useCurrentWorkspace();
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const ids = rows.map((r) => r.multica_project).filter((x): x is string => !!x);
+  const res = useQueries({
+    queries: ids.map((pid) => ({
+      queryKey: ["capex-usage", workspace?.id, pid, tz],
+      enabled: !!workspace?.id,
+      staleTime: 5 * 60_000,
+      queryFn: () => api.getDashboardUsageDaily({ days: 365, project_id: pid, tz }),
+    })),
+  });
+  return useMemo(() => {
+    const from = new Date(Date.now() - (USAGE_DAYS - 1) * 86_400_000).toISOString().slice(0, 10);
+    const out = new Map<string, { tokens: number; usd: number }>();
+    ids.forEach((pid, i) => {
+      const data = res[i]?.data as DashboardUsageDaily[] | undefined;
+      if (!data) return;
+      out.set(pid, data.filter((d) => d.date >= from).reduce((a, d) => ({ tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0 }));
+    });
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids.join(","), res.map((q) => q.dataUpdatedAt).join(",")]);
+}
+
+/** The project list: one table, so every status group shares the same columns. */
 export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => void }) {
   const groups = STATUS_ORDER.map((s) => ({ s, items: rows.filter((r) => r.status === s) })).concat(
     [{ s: "andet", items: rows.filter((r) => !STATUS_ORDER.includes(r.status)) }],
   ).filter((g) => g.items.length);
   const [closed, setClosed] = useState<Record<string, boolean>>({ closed: true });
+  const capex = useCapex();
+  const usage = useProjectUsage(rows);
+  const rate = capex.data?.usd_dkk ?? 6.9;
+  const max = Math.max(1, ...[...usage.values()].map((u) => u.tokens));
+  const hasUsage = rows.some((r) => r.multica_project);
+  const th = "px-3 py-2 font-medium";
   return (
-    <div className="flex flex-col gap-6">
-      {groups.map(({ s, items }) => (
-        <section key={s} aria-labelledby={`grp-${s}`}>
-          <button type="button" id={`grp-${s}`} onClick={() => setClosed((c) => ({ ...c, [s]: !c[s] }))}
-            className="mb-2 flex items-center gap-3 text-sm" aria-expanded={!closed[s]}>
-            <span className="text-muted-foreground">{closed[s] ? "▸" : "▾"}</span>
-            <StatusPill status={s} color={items[0]?.status_color} />
-            <span className="text-muted-foreground">{items.length}</span>
-          </button>
-          {!closed[s] && (
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full min-w-[860px] text-sm">
-                <thead className="text-left text-xs text-muted-foreground">
-                  <tr className="border-b">
-                    <th className="px-3 py-2 font-medium">Navn</th><th className="px-3 py-2 font-medium">Ansvarlig</th>
-                    <th className="px-3 py-2 font-medium">Due date</th><th className="px-3 py-2 font-medium">Team</th>
-                    <th className="px-3 py-2 font-medium">Priority</th><th className="px-3 py-2 text-right font-medium">💡 WOF</th>
-                    <th className="px-3 py-2 text-right font-medium">CV</th><th className="px-3 py-2 text-right font-medium">SW</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((r) => (
-                    <tr key={r.id} onClick={() => open(r.id)} className="cursor-pointer border-b last:border-0 hover:bg-accent/50">
-                      <td className="px-3 py-2">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); open(r.id); }} className="text-left font-medium hover:underline focus-visible:outline-2">
-                          {r.hub && <span title="Har diamant og projekt-chat" className="mr-1.5 text-[#CF022D]">◇</span>}
-                          {r.name}
-                        </button>
-                        {r.demo && <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">demo</span>}
-                        {r.subtasks > 0 && <span className="ml-2 text-xs text-muted-foreground">↳ {r.subtasks}</span>}
-                      </td>
-                      <td className="px-3 py-2"><Avatars people={r.assignees} /></td>
-                      <td className="px-3 py-2 tabular-nums">{date(r.due_date)}</td>
-                      <td className="px-3 py-2">
-                        {((r.fields.team as string[]) || []).map((t) => (
-                          <span key={t} className="mr-1 rounded bg-muted px-1.5 py-0.5 text-xs">{t}</span>
-                        ))}
-                      </td>
-                      <td className="px-3 py-2 capitalize">{show(r.priority)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{show(r.fields.wof)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{show(r.fields.cv)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{show(r.fields.sw)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      ))}
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full min-w-[980px] table-fixed text-sm">
+        <colgroup>
+          <col /><col className="w-24" /><col className="w-32" />{hasUsage && <col className="w-40" />}
+          <col className="w-28" /><col className="w-28" /><col className="w-16" /><col className="w-12" /><col className="w-12" />
+        </colgroup>
+        <thead className="sticky top-0 z-10 bg-background text-left text-xs text-muted-foreground">
+          <tr className="border-b">
+            <th className={th}>Projekt</th><th className={th}>Ansvarlig</th><th className={th}>Capex</th>
+            {hasUsage && <th className={th} title="Agenternes tokens (input og output) og anslået pris til listepris">Forbrug · {USAGE_DAYS} dage</th>}
+            <th className={th}>Deadline</th><th className={th}>Prioritet</th>
+            <th className={`${th} text-right`} title="WOF Score">💡 WOF</th>
+            <th className={`${th} text-right`} title="CV Score (Commercial value)">CV</th>
+            <th className={`${th} text-right`} title="SW Score (Smarter Work)">SW</th>
+          </tr>
+        </thead>
+        {groups.map(({ s, items }) => (
+          <tbody key={s}>
+            <tr className="border-b bg-muted/40">
+              <td colSpan={hasUsage ? 9 : 8} className="px-3 py-1.5">
+                <button type="button" onClick={() => setClosed((c) => ({ ...c, [s]: !c[s] }))} aria-expanded={!closed[s]}
+                  className="flex items-center gap-2.5 text-sm">
+                  <span className="w-3 text-muted-foreground">{closed[s] ? "▸" : "▾"}</span>
+                  <StatusPill status={s} color={items[0]?.status_color} />
+                  <span className="text-xs text-muted-foreground">{items.length}</span>
+                </button>
+              </td>
+            </tr>
+            {!closed[s] && items.map((r) => {
+              const team = (r.fields.team as string[]) || [];
+              const cx = capex.data?.items.find((c) => c.id === r.fields.capex_id);
+              const u = r.multica_project ? usage.get(r.multica_project) : undefined;
+              return (
+                <tr key={r.id} onClick={() => open(r.id)} className="cursor-pointer border-b align-middle last:border-0 hover:bg-accent/50">
+                  <td className="px-3 py-2.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="w-3 shrink-0 text-[#CF022D]" title={r.hub ? "Har diamant og projekt-chat" : undefined}>{r.hub ? "◇" : ""}</span>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); open(r.id); }} className="truncate text-left font-medium hover:underline focus-visible:outline-2">
+                        {r.name}
+                      </button>
+                      {r.demo && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">demo</span>}
+                      {r.subtasks > 0 && <span className="shrink-0 text-xs text-muted-foreground">↳ {r.subtasks}</span>}
+                    </div>
+                    {team.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1 pl-[18px]">
+                        {team.map((t) => <span key={t} className="rounded border px-1.5 text-[11px] leading-5 text-muted-foreground">{t}</span>)}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5"><Avatars people={r.assignees} /></td>
+                  <td className="px-3 py-2.5">
+                    {cx ? (
+                      <span className="flex min-w-0 flex-col" title={`${cx.number} · ${cx.description}`}>
+                        <span className="font-medium tabular-nums">{cx.number}</span>
+                        <span className="truncate text-xs text-muted-foreground">{cx.description}</span>
+                      </span>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  {hasUsage && (
+                    <td className="px-3 py-2.5">
+                      {u && u.tokens > 0 ? (
+                        <span className="flex flex-col gap-1" title={`${u.tokens.toLocaleString("da-DK")} tokens · anslået ${nfKr.format(u.usd * rate)}`}>
+                          <span className="flex items-baseline justify-between gap-2 tabular-nums">
+                            <span>{nfTokens.format(u.tokens)}</span>
+                            <span className="text-xs text-muted-foreground">{nfKr.format(u.usd * rate)}</span>
+                          </span>
+                          <span className="h-1 rounded-full bg-muted">
+                            <span className="block h-1 rounded-full bg-[#2D6CB5] dark:bg-[#3F7BC4]" style={{ width: `${Math.max(3, (u.tokens / max) * 100)}%` }} />
+                          </span>
+                        </span>
+                      ) : <span className="text-muted-foreground">{r.multica_project && !u ? "…" : "—"}</span>}
+                    </td>
+                  )}
+                  <td className="px-3 py-2.5 tabular-nums">{date(r.due_date)}</td>
+                  <td className="px-3 py-2.5">
+                    {r.priority && r.priority !== "none" ? (
+                      <span className="flex items-center gap-1.5 capitalize">
+                        <span className={`size-2 rounded-full ${PRIORITY_DOT[r.priority] ?? "bg-muted-foreground"}`} aria-hidden="true" />{r.priority}
+                      </span>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-medium tabular-nums">{show(r.fields.wof)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{show(r.fields.cv)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{show(r.fields.sw)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        ))}
+      </table>
     </div>
   );
 }
-
 
 const ISSUE_STATUS_COLOR: Record<string, string> = {
   backlog: "#87909e", todo: "#87909e", in_progress: "#1090e0", in_review: "#5f55ee", done: "#2f9e44", blocked: "#d33d44", cancelled: "#adb5bd",

@@ -378,22 +378,22 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
   const rate = capex.data?.usd_dkk ?? 6.9;
   const max = Math.max(1, ...[...usage.values()].map((u) => u.tokens));
   const hasUsage = rows.some((r) => r.multica_project);
-  const th = "px-3 py-2 font-medium";
+  const th = "px-3 py-2 text-center font-medium";
   return (
     <div className="overflow-x-auto rounded-lg border">
       <table className="w-full min-w-[980px] table-fixed text-sm">
         <colgroup>
-          <col /><col className="w-24" /><col className="w-32" />{hasUsage && <col className="w-40" />}
-          <col className="w-28" /><col className="w-28" /><col className="w-16" /><col className="w-12" /><col className="w-12" />
+          <col className="w-[27%]" /><col className="w-[9%]" /><col className="w-[12%]" />{hasUsage && <col className="w-[14%]" />}
+          <col className="w-[11%]" /><col className="w-[10%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
         </colgroup>
-        <thead className="sticky top-0 z-10 bg-background text-left text-xs text-muted-foreground">
-          <tr className="border-b">
-            <th className={th}>Projekt</th><th className={th}>Ansvarlig</th><th className={th}>Capex</th>
+        <thead className="sticky top-0 z-10 bg-background text-xs text-muted-foreground">
+          <tr className="divide-x border-b">
+            <th className="px-3 py-2 text-left font-medium">Projekt</th><th className={th}>Ansvarlig</th><th className={th}>Capex</th>
             {hasUsage && <th className={th} title="Agenternes tokens (input og output) og anslået pris til listepris">Forbrug · {USAGE_DAYS} dage</th>}
             <th className={th}>Deadline</th><th className={th}>Prioritet</th>
-            <th className={`${th} text-right`} title="WOF Score">💡 WOF</th>
-            <th className={`${th} text-right`} title="CV Score (Commercial value)">CV</th>
-            <th className={`${th} text-right`} title="SW Score (Smarter Work)">SW</th>
+            <th className={th} title="WOF Score">💡 WOF</th>
+            <th className={th} title="CV Score (Commercial value)">CV</th>
+            <th className={th} title="SW Score (Smarter Work)">SW</th>
           </tr>
         </thead>
         {groups.map(({ s, items }) => (
@@ -413,8 +413,8 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
               const cx = capex.data?.items.find((c) => c.id === r.fields.capex_id);
               const u = r.multica_project ? usage.get(r.multica_project) : undefined;
               return (
-                <tr key={r.id} onClick={() => open(r.id)} className="cursor-pointer border-b align-middle last:border-0 hover:bg-accent/50">
-                  <td className="px-3 py-2.5">
+                <tr key={r.id} onClick={() => open(r.id)} className="cursor-pointer divide-x border-b text-center align-middle last:border-0 hover:bg-accent/50">
+                  <td className="px-3 py-2.5 text-left">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span className="w-3 shrink-0 text-[#CF022D]" title={r.hub ? "Har diamant og projekt-chat" : undefined}>{r.hub ? "◇" : ""}</span>
                       <button type="button" onClick={(e) => { e.stopPropagation(); open(r.id); }} className="truncate text-left font-medium hover:underline focus-visible:outline-2">
@@ -429,12 +429,12 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-2.5"><Avatars people={r.assignees} /></td>
+                  <td className="px-3 py-2.5"><span className="flex justify-center"><Avatars people={r.assignees} /></span></td>
                   <td className="px-3 py-2.5">
                     {cx ? (
-                      <span className="flex min-w-0 flex-col" title={`${cx.number} · ${cx.description}`}>
+                      <span className="flex min-w-0 flex-col items-center" title={`${cx.number} · ${cx.description}`}>
                         <span className="font-medium tabular-nums">{cx.number}</span>
-                        <span className="truncate text-xs text-muted-foreground">{cx.description}</span>
+                        <span className="max-w-full truncate text-xs text-muted-foreground">{cx.description}</span>
                       </span>
                     ) : <span className="text-muted-foreground">—</span>}
                   </td>
@@ -442,7 +442,7 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
                     <td className="px-3 py-2.5">
                       {u && u.tokens > 0 ? (
                         <span className="flex flex-col gap-1" title={`${u.tokens.toLocaleString("da-DK")} tokens · anslået ${nfKr.format(u.usd * rate)}`}>
-                          <span className="flex items-baseline justify-between gap-2 tabular-nums">
+                          <span className="flex items-baseline justify-center gap-2 tabular-nums">
                             <span>{nfTokens.format(u.tokens)}</span>
                             <span className="text-xs text-muted-foreground">{nfKr.format(u.usd * rate)}</span>
                           </span>
@@ -456,14 +456,14 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
                   <td className="px-3 py-2.5 tabular-nums">{date(r.due_date)}</td>
                   <td className="px-3 py-2.5">
                     {r.priority && r.priority !== "none" ? (
-                      <span className="flex items-center gap-1.5 capitalize">
+                      <span className="flex items-center justify-center gap-1.5 capitalize">
                         <span className={`size-2 rounded-full ${PRIORITY_DOT[r.priority] ?? "bg-muted-foreground"}`} aria-hidden="true" />{r.priority}
                       </span>
                     ) : <span className="text-muted-foreground">—</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-medium tabular-nums">{show(r.fields.wof)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{show(r.fields.cv)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{show(r.fields.sw)}</td>
+                  <td className="px-3 py-2.5 font-medium tabular-nums">{show(r.fields.wof)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-muted-foreground">{show(r.fields.cv)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-muted-foreground">{show(r.fields.sw)}</td>
                 </tr>
               );
             })}

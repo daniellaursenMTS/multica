@@ -81,6 +81,7 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "projects",
   "diamonds",
   "team",
+  "capex",
   // Static route next to the workspace segment that serves the Diamonds page's diagrams.
   "diamond-views",
   "autopilots",

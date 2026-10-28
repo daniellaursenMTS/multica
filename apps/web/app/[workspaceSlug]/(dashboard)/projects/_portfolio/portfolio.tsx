@@ -61,7 +61,7 @@ export const FIELD_ROWS: [string, string][] = [
   ["ts", "TS Score (T-shirt size)"], ["tshirt_size", "T-shirt Size"], ["smarter_work", "Smarter Work"],
   ["commercial_value", "Commercial Value"], ["activation_channel", "Activation channel / Connector"],
   ["manual_handling_time", "Manual handling time"], ["saved_time", "Saved time per workflow"],
-  ["trigger_type", "Trigger type"], ["success_metrics", "Success metrics"],
+  ["trigger_type", "Trigger type"], ["success_metrics", "Success metrics"], ["capex", "Capex"],
 ];
 
 export function useText(url: string | null) {
@@ -114,9 +114,10 @@ type PfForm = {
   name: string; description: string; status: string; priority: string; start_date: string; due_date: string;
   tshirt_size: string; smarter_work: string; commercial_value: string; urgency: string; team: string;
   activation_channel: string; manual_handling_time: string; saved_time: string; trigger_type: string; success_metrics: string;
+  capex: string;
 };
 const META_KEYS: (keyof PfForm)[] = ["tshirt_size", "smarter_work", "commercial_value", "urgency", "team",
-  "activation_channel", "manual_handling_time", "saved_time", "trigger_type", "success_metrics"];
+  "activation_channel", "manual_handling_time", "saved_time", "trigger_type", "success_metrics", "capex"];
 const NUMERIC = new Set(["tshirt_size", "smarter_work", "commercial_value", "urgency", "manual_handling_time", "saved_time"]);
 
 export function fieldsFromMeta(m: IssueMetadata | undefined): Record<string, unknown> {
@@ -130,6 +131,7 @@ export function fieldsFromMeta(m: IssueMetadata | undefined): Record<string, unk
     ts: tsScore, sw, cv, wof: tsScore && sw && cv && u ? cv + tsScore + sw + u : null,
     team: list("team"), activation_channel: list("activation_channel"), manual_handling_time: n("manual_handling_time"),
     saved_time: n("saved_time"), trigger_type: list("trigger_type"), success_metrics: list("success_metrics"),
+    capex_id: m.pf_capex ? String(m.pf_capex) : null,
   };
 }
 
@@ -143,7 +145,45 @@ function emptyForm(row?: Row | null, project?: Project | null): PfForm {
     tshirt_size: g("tshirt_size"), smarter_work: g("smarter_work"), commercial_value: g("commercial_value"), urgency: g("urgency"),
     team: g("team") || ((row?.fields.team as string[] | undefined) ?? []).join(", "), activation_channel: g("activation_channel"),
     manual_handling_time: g("manual_handling_time"), saved_time: g("saved_time"), trigger_type: g("trigger_type"), success_metrics: g("success_metrics"),
+    capex: g("capex"),
   };
+}
+
+// ---- Capex -----------------------------------------------------------------------------------
+// The Capex numbers live as one JSON value (capex_catalog) on a dedicated «Capex-register» issue;
+// a project points at one by its stable id in pf_capex on its intake issue. Admins edit the list
+// on the Capex page; ids never change, so renaming a number keeps its projects.
+export interface CapexItem { id: string; number: string; description: string; active: boolean }
+export interface CapexCatalog { usd_dkk: number; items: CapexItem[] }
+const EMPTY_CAPEX: CapexCatalog = { usd_dkk: 6.9, items: [] };
+
+export function useCapex() {
+  const workspace = useCurrentWorkspace();
+  return useQuery({
+    queryKey: ["capex", workspace?.id],
+    enabled: !!workspace?.id,
+    queryFn: async () => {
+      const res = await api.listIssues({ metadata: { capex_register: true }, limit: 1 });
+      const issue = res.issues[0] ?? null;
+      let catalog = EMPTY_CAPEX;
+      try {
+        const raw = issue?.metadata.capex_catalog;
+        if (typeof raw === "string") catalog = { ...EMPTY_CAPEX, ...JSON.parse(raw) };
+      } catch { /* unreadable: start empty */ }
+      return { issueId: issue?.id ?? null, ...catalog };
+    },
+  });
+}
+
+export async function saveCapex(issueId: string | null, catalog: CapexCatalog): Promise<string> {
+  let id = issueId;
+  if (!id) {
+    id = (await api.createIssue({ title: "Capex-register", status: "done", allow_duplicate: true,
+      description: "Capex-numre for projekterne. Redigeres på Capex-siden i Multica; ret ikke metadata i hånden." })).id;
+    await api.setIssueMetadataKey(id, "capex_register", true);
+  }
+  await api.setIssueMetadataKey(id, "capex_catalog", JSON.stringify(catalog));
+  return id;
 }
 
 /** Create or edit a project's Portfolio fields. Creating makes a Multica project plus its intake issue;
@@ -154,6 +194,7 @@ export function ProjectForm({ mode, row, project, onDone, onCancel }: {
   const me = useAuthStore((s) => s.user?.id ?? null);
   const qc = useQueryClient();
   const [f, setF] = useState<PfForm>(() => emptyForm(row, project));
+  const capex = useCapex();
   const set = (k: keyof PfForm) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
   const editsProject = mode === "create" || row?.source === "multica";
   const save = useMutation({
@@ -239,6 +280,15 @@ export function ProjectForm({ mode, row, project, onDone, onCancel }: {
           <input id="pf-trigger" value={f.trigger_type} onChange={set("trigger_type")} className={input} /></label>
         <label className="flex flex-col gap-1 text-sm"><span className="text-muted-foreground">Success metrics</span>
           <input id="pf-success" value={f.success_metrics} onChange={set("success_metrics")} className={input} /></label>
+        <label className="flex flex-col gap-1 text-sm sm:col-span-2"><span className="text-muted-foreground">Capex</span>
+          <select id="pf-capex" value={f.capex} onChange={set("capex")} className={input}>
+            <option value="">Intet Capex</option>
+            {(capex.data?.items ?? []).filter((c) => c.active || c.id === f.capex).map((c) => (
+              <option key={c.id} value={c.id}>{c.number} · {c.description}{c.active ? "" : " (lukket)"}</option>
+            ))}
+          </select>
+          {!capex.data?.items.length && <span className="text-xs text-muted-foreground">Der er ingen Capex-numre endnu. En administrator opretter dem på Capex-siden.</span>}
+        </label>
       </div>
       <p className="text-xs text-muted-foreground tabular-nums">
         Scorer: 💡 WOF {show(preview.wof)} = CV {show(preview.cv)} + TS {show(preview.ts)} + SW {show(preview.sw)} + Urgency {show(preview.urgency)}
@@ -1197,7 +1247,12 @@ export function usePortfolio() {
   const pf = useMemo<Portfolio | null>(() => (pfText ? JSON.parse(pfText) : null), [pfText]);
   const index = useMemo<Index | null>(() => (idxText ? JSON.parse(idxText) : null), [idxText]);
 
+  const capex = useCapex();
   const rows = useMemo<Row[]>(() => {
+    const capexLabel = (id: string | null) => {
+      const c = id ? capex.data?.items.find((x) => x.id === id) : undefined;
+      return c ? `${c.number} · ${c.description}` : null;
+    };
     const generated = pf?.rows ?? [];
     const intakeBy = new Map((live?.intakes ?? []).filter((i) => i.project_id).map((i) => [i.project_id as string, i]));
     const hubBy = new Map(generated.filter((r) => r.multica_project).map((r) => [r.multica_project as string, r]));
@@ -1230,7 +1285,8 @@ export function usePortfolio() {
         priority: pr.priority === "none" ? null : pr.priority,
         start_date: pr.start_date?.slice(0, 10) ?? null, due_date: pr.due_date?.slice(0, 10) ?? null,
         updated: pr.updated_at, description: pr.description || hub?.description || "", subtasks: 0,
-        fields: { ...(hub?.fields ?? {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== null)) },
+        fields: { ...(hub?.fields ?? {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== null)),
+          ...(capexLabel(extra.capex_id as string | null) ? { capex: capexLabel(extra.capex_id as string | null) } : {}) },
         multica_project: pr.id, intake_issue: intake?.id ?? null, intake_meta: intake?.metadata,
         lead_id: pr.lead_type === "member" ? pr.lead_id : null,
         diamond, dia_spec: spec, dia_archived: archived, ...(archived ? { hub: null } : {}),
@@ -1240,7 +1296,7 @@ export function usePortfolio() {
     }
     const clickup = generated.filter((r) => r.source === "clickup" && !moved.has(r.id) && r.status !== "closed");
     return [...out, ...clickup];
-  }, [pf, live, members]);
+  }, [pf, live, members, capex.data]);
 
   const me = index && email ? index.accounts[email.toLowerCase()] ?? null : null;
   const myHubs = new Set(index?.people.find((x) => x.name === me)?.roles.map((r) => r.project) ?? []);

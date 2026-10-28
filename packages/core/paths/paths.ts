@@ -35,6 +35,7 @@ function workspaceScoped(slug: string) {
     autopilotDetail: (id: string) => `${ws}/autopilots/${encode(id)}`,
     diamonds: () => `${ws}/diamonds`,
     team: () => `${ws}/team`,
+    capex: () => `${ws}/capex`,
     agents: () => `${ws}/agents`,
     newAgent: () => `${ws}/agents/new`,
     // The two creation methods behind the chooser. Each is a real route so a

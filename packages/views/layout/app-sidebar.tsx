@@ -120,6 +120,7 @@ type NavKey =
   | "projects"
   | "diamonds"
   | "team"
+  | "capex"
   | "autopilots"
   | "agents"
   | "squads"
@@ -138,6 +139,7 @@ type NavLabelKey =
   | "projects"
   | "diamonds"
   | "team"
+  | "capex"
   | "autopilots"
   | "agents"
   | "squads"
@@ -165,6 +167,7 @@ const workNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "issues", labelKey: "issues" },
   { key: "projects", labelKey: "projects" },
   { key: "team", labelKey: "team" },
+  { key: "capex", labelKey: "capex" },
   { key: "autopilots", labelKey: "autopilots" },
 ];
 
@@ -901,7 +904,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.work_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workNav.filter((item) => item.key !== "team" || isWorkspaceAdmin).map((item) => {
+                {workNav.filter((item) => (item.key !== "team" && item.key !== "capex") || isWorkspaceAdmin).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = !isActivePinnedRoute && isNavActive(pathname, href);

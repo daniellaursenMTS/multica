@@ -184,7 +184,8 @@ export default function CapexPage() {
       const u = m.days.filter((d) => d.date >= period.from && d.date <= period.to)
         .reduce((a, d) => ({ tokens: a.tokens + d.tokens, usd: a.usd + d.usd }), { tokens: 0, usd: 0 });
       if (!u.tokens && !u.usd) return;
-      const target = byCapex.get(m.capex_id ?? "") ?? none;
+      const owner = m.project_id ? projects.find((r) => r.multica_project === m.project_id) : undefined;
+      const target = byCapex.get(String(owner ? owner.fields.capex_id ?? "" : m.capex_id ?? "")) ?? none;
       target.tokens += u.tokens; target.usd += u.usd; target.projects.push(`${m.label} (manuel)`);
       manual += u.tokens;
     });
@@ -323,12 +324,17 @@ export default function CapexPage() {
                       <tr key={m.id} className="border-b align-top last:border-0">
                         <td className="px-3 py-2"><div className="font-medium">{m.label}</div>{m.note && <div className="text-xs text-muted-foreground">{m.note}</div>}</td>
                         <td className="px-3 py-2">
+                          {m.project_id ? (() => {
+                            const owner = projects.find((r) => r.multica_project === m.project_id);
+                            const cx = items.find((c) => c.id === owner?.fields.capex_id);
+                            return <span className="text-sm">{cx ? `${cx.number} · ${cx.description}` : "Intet Capex"}<span className="block text-xs text-muted-foreground">følger {owner?.name ?? "projektet"}</span></span>;
+                          })() : (
                           <select id={`manual-capex-${m.id}`} value={m.capex_id ?? ""} disabled={save.isPending} aria-label={`Capex for ${m.label}`}
                             onChange={(e) => setManual(manualEntries.map((x) => (x.id === m.id ? { ...x, capex_id: e.target.value || null } : x)))}
                             className="rounded-md border bg-background px-2 py-1 text-sm">
                             <option value="">Intet Capex</option>
                             {items.filter((c) => c.active || c.id === m.capex_id).map((c) => <option key={c.id} value={c.id}>{c.number} · {c.description}</option>)}
-                          </select>
+                          </select>)}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{dates.length ? `${dates.at(0)} – ${dates.at(-1)} (${dates.length})` : "—"}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{nfTokens.format(t.tokens)}</td>

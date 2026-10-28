@@ -156,10 +156,10 @@ function emptyForm(row?: Row | null, project?: Project | null): PfForm {
 // on the Capex page; ids never change, so renaming a number keeps its projects.
 // Manual entries carry usage Multica never saw (e.g. Claude Code sessions that built the setup),
 // day by day so the period filter works; matas-ai-automation/capex/claude_code_usage.py keeps the
-// Claude Code entry current.
+// Claude Code entries current. An entry with project_id follows that project's Capex.
 export interface CapexItem { id: string; number: string; description: string; active: boolean }
 export interface CapexDay { date: string; tokens: number; usd: number }
-export interface CapexManual { id: string; capex_id: string | null; label: string; note?: string; days: CapexDay[] }
+export interface CapexManual { id: string; capex_id: string | null; project_id?: string | null; label: string; note?: string; days: CapexDay[] }
 export interface CapexCatalog { usd_dkk: number; items: CapexItem[]; manual?: CapexManual[] }
 const EMPTY_CAPEX: CapexCatalog = { usd_dkk: 6.9, items: [], manual: [] };
 
@@ -340,9 +340,10 @@ const nfTokens = new Intl.NumberFormat("da-DK", { notation: "compact", maximumFr
 const nfKr = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK", maximumFractionDigits: 0 });
 const USAGE_DAYS = 30;
 
-/** Agent use per project over the last 30 days, from Multica's usage records (same query and cache
- *  as the Capex page). Tokens = input + output; kroner are a list-price estimate. */
-function useProjectUsage(rows: Row[]) {
+/** Use per project over the last 30 days: Multica's agent usage records (same query and cache as the
+ *  Capex page) plus manual Capex posts tied to the project, such as its Claude Code sessions.
+ *  Tokens = input + output; kroner are a list-price estimate. */
+function useProjectUsage(rows: Row[], manual: CapexManual[]) {
   const workspace = useCurrentWorkspace();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const ids = rows.map((r) => r.multica_project).filter((x): x is string => !!x);
@@ -360,11 +361,13 @@ function useProjectUsage(rows: Row[]) {
     ids.forEach((pid, i) => {
       const data = res[i]?.data as DashboardUsageDaily[] | undefined;
       if (!data) return;
-      out.set(pid, data.filter((d) => d.date >= from).reduce((a, d) => ({ tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0 }));
+      const u = data.filter((d) => d.date >= from).reduce((a, d) => ({ tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0 });
+      manual.filter((m) => m.project_id === pid).forEach((m) => m.days.filter((d) => d.date >= from).forEach((d) => { u.tokens += d.tokens; u.usd += d.usd; }));
+      out.set(pid, u);
     });
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ids.join(","), res.map((q) => q.dataUpdatedAt).join(",")]);
+  }, [ids.join(","), res.map((q) => q.dataUpdatedAt).join(","), manual]);
 }
 
 /** The project list: one table, so every status group shares the same columns. */
@@ -374,7 +377,7 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
   ).filter((g) => g.items.length);
   const [closed, setClosed] = useState<Record<string, boolean>>({ closed: true });
   const capex = useCapex();
-  const usage = useProjectUsage(rows);
+  const usage = useProjectUsage(rows, capex.data?.manual ?? []);
   const rate = capex.data?.usd_dkk ?? 6.9;
   const max = Math.max(1, ...[...usage.values()].map((u) => u.tokens));
   const hasUsage = rows.some((r) => r.multica_project);
@@ -389,7 +392,7 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
         <thead className="sticky top-0 z-10 bg-background text-xs text-muted-foreground">
           <tr className="divide-x border-b">
             <th className="px-3 py-2 text-left font-medium">Projekt</th><th className={th}>Ansvarlig</th><th className={th}>Capex</th>
-            {hasUsage && <th className={th} title="Agenternes tokens (input og output) og anslået pris til listepris">Forbrug · {USAGE_DAYS} dage</th>}
+            {hasUsage && <th className={th} title="Agenternes tokens (input og output) plus manuelle Capex-poster på projektet, fx Claude Code, og anslået pris til listepris">Forbrug · {USAGE_DAYS} dage</th>}
             <th className={th}>Deadline</th><th className={th}>Prioritet</th>
             <th className={th} title="WOF Score">💡 WOF</th>
             <th className={th} title="CV Score (Commercial value)">CV</th>

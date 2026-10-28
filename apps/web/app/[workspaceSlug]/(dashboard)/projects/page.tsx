@@ -14,6 +14,7 @@ function ProjectList() {
   const p = useWorkspacePaths();
   const { pf, index, rows, me, isMine, error, loading } = usePortfolio();
   const [creating, setCreating] = useState(false);
+  const [showClickup, setShowClickup] = useState(false);
   const mine = params.get("filter") === "mine";
   const open = (id: string) => router.push(p.projectDetail(id));
   const setFilter = (v: string | null) => router.push(v ? `?filter=${v}` : "?");
@@ -64,12 +65,18 @@ function ProjectList() {
         {clickup.length > 0 && (
           <section className="flex flex-col gap-3 border-t pt-6" aria-labelledby="from-clickup">
             <div>
-              <h2 id="from-clickup" className="text-sm font-medium">Fra ClickUp <span className="font-normal text-muted-foreground">· {clickup.length} · kun læsning</span></h2>
-              <p className="text-xs text-muted-foreground">
+              <h2 id="from-clickup" className="text-sm font-medium">
+                <button type="button" onClick={() => setShowClickup((v) => !v)} aria-expanded={showClickup} aria-controls="clickup-list"
+                  className="flex items-center gap-2 hover:underline">
+                  <span className="w-3 text-muted-foreground">{showClickup ? "▾" : "▸"}</span>
+                  Fra ClickUp <span className="font-normal text-muted-foreground">· {clickup.length} · kun læsning</span>
+                </button>
+              </h2>
+              <p className="pl-5 text-xs text-muted-foreground">
                 Intake-projekter, der endnu ikke er flyttet. Åbn et projekt og vælg «Flyt til Multica» for at redigere det og give agenter opgaver.
               </p>
             </div>
-            <Overview rows={clickup} open={open} />
+            {showClickup && <div id="clickup-list"><Overview rows={clickup} open={open} /></div>}
           </section>
         )}
 

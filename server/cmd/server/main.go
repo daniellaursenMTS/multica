@@ -785,7 +785,10 @@ func main() {
 	// not fit). Crash recovery, occurrence-level idempotency, lease
 	// theft, and retry are all reused from the manager + sys_cron_executions
 	// — there is no separate goroutine for scheduled Autopilot anymore.
-	if err := schedulerMgr.Register(scheduler.AutopilotScheduleDispatchJob(pool, queries, autopilotSvc)); err != nil {
+	// AUTOPILOT_SCHEDULE_MAX_LATENESS widens how late an occurrence may
+	// still fire, for hosts that sleep through their schedule.
+	autopilotMaxLateness := envDuration("AUTOPILOT_SCHEDULE_MAX_LATENESS", scheduler.DefaultAutopilotScheduleMaxLateness)
+	if err := schedulerMgr.Register(scheduler.AutopilotScheduleDispatchJobWithMaxLateness(pool, queries, autopilotSvc, autopilotMaxLateness)); err != nil {
 		slog.Warn("scheduler: failed to register autopilot_schedule_dispatch job", "error", err)
 	}
 	// Manifest-declared Plugin schedules share the same durable lease and retry

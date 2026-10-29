@@ -1,6 +1,10 @@
-# Mounts the generated diamond views into the web container for the Diamonds page.
+# Mounts the generated diamond views into the web container for the Diamonds page,
+# and lets scheduled autopilots catch up on a slot the Mac slept through.
 # Add as the last -f file when building or starting the self-hosted stack.
 services:
+  backend:
+    environment:
+      AUTOPILOT_SCHEDULE_MAX_LATENESS: ${AUTOPILOT_SCHEDULE_MAX_LATENESS:-12h}
   frontend:
     environment:
       DIAMOND_VIEWS_DIR: /data/diamond-views

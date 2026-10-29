@@ -30,12 +30,18 @@ const ScopeKindAutopilotTrigger = "autopilot_trigger"
 // service.DefaultAutopilotTriggerTimezone.
 const DefaultAutopilotScheduleTimezone = "UTC"
 
-// maxAutopilotScheduleLateness is the acceptance window for dispatching a
-// cron occurrence after its configured plan_time. Normal scheduler jitter is
-// tens of seconds; anything beyond this is a stale catch-up and should wait
-// for the next configured slot instead of firing at an arbitrary activation
-// time.
-const maxAutopilotScheduleLateness = 5 * time.Minute
+// DefaultAutopilotScheduleMaxLateness is the acceptance window for
+// dispatching a cron occurrence after its configured plan_time. Normal
+// scheduler jitter is tens of seconds; anything beyond this is a stale
+// catch-up and should wait for the next configured slot instead of firing at
+// an arbitrary activation time.
+//
+// Self-hosted installs on a machine that sleeps (a laptop) can widen it with
+// AutopilotScheduleDispatchJobWithMaxLateness so an occurrence missed while
+// the host slept fires once on wake instead of being skipped every time. The
+// planner never looks further back than its 24h replay window, so values
+// above that behave like 24h.
+const DefaultAutopilotScheduleMaxLateness = 5 * time.Minute
 
 // AutopilotScheduleDispatcher is the narrow contract this job needs
 // from service.AutopilotService. Defined here so unit tests in this
@@ -91,6 +97,21 @@ func AutopilotScheduleDispatchJob(
 	queries *db.Queries,
 	dispatcher AutopilotScheduleDispatcher,
 ) JobSpec {
+	return AutopilotScheduleDispatchJobWithMaxLateness(pool, queries, dispatcher, DefaultAutopilotScheduleMaxLateness)
+}
+
+// AutopilotScheduleDispatchJobWithMaxLateness is AutopilotScheduleDispatchJob
+// with a custom lateness window (see DefaultAutopilotScheduleMaxLateness).
+// A non-positive maxLateness falls back to the default.
+func AutopilotScheduleDispatchJobWithMaxLateness(
+	pool *pgxpool.Pool,
+	queries *db.Queries,
+	dispatcher AutopilotScheduleDispatcher,
+	maxLateness time.Duration,
+) JobSpec {
+	if maxLateness <= 0 {
+		maxLateness = DefaultAutopilotScheduleMaxLateness
+	}
 	cache := newAutopilotScheduleCache()
 
 	return JobSpec{
@@ -115,7 +136,7 @@ func AutopilotScheduleDispatchJob(
 		MaxPlansPerTick: 5,
 
 		Scopes:        autopilotScopes(pool, queries, cache),
-		PlansForScope: autopilotPlansForScope(cache),
+		PlansForScope: autopilotPlansForScope(cache, maxLateness),
 		Handler:       autopilotHandler(queries, dispatcher),
 	}
 }
@@ -232,7 +253,7 @@ func autopilotScopes(
 // past the failed bucket and the occurrence would be lost — the
 // canonical bug from the #4444 review where a claim+crash sequence
 // could leak a scheduled occurrence (MUL-3551 acceptance ③).
-func autopilotPlansForScope(cache *autopilotScheduleCache) func(
+func autopilotPlansForScope(cache *autopilotScheduleCache, maxLateness time.Duration) func(
 	ctx context.Context, scope Scope, now time.Time, latest LatestPlanInfo,
 ) ([]time.Time, error) {
 	const replayWindow = 24 * time.Hour
@@ -309,15 +330,15 @@ func autopilotPlansForScope(cache *autopilotScheduleCache) func(
 		}
 		// CatchUpLatestOnly: collapse missed fires to the most recent.
 		latestDue := occs[len(occs)-1]
-		if isAutopilotSchedulePlanStale(now, latestDue) {
+		if isAutopilotSchedulePlanStale(now, latestDue, maxLateness) {
 			return nil, nil
 		}
 		return []time.Time{latestDue}, nil
 	}
 }
 
-func isAutopilotSchedulePlanStale(now, planTime time.Time) bool {
-	return now.Sub(planTime) > maxAutopilotScheduleLateness
+func isAutopilotSchedulePlanStale(now, planTime time.Time, maxLateness time.Duration) bool {
+	return now.Sub(planTime) > maxLateness
 }
 
 // autopilotHandler dispatches one (trigger, planTime) attempt and

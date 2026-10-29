@@ -555,22 +555,29 @@ export function NewTask({ projectId, projectName, agents }: { projectId: string;
   const [description, setDescription] = useState("");
   const [agentId, setAgentId] = useState("");
   const [startNow, setStartNow] = useState(true);
+  const [images, setImages] = useState<File[]>([]);
   const [created, setCreated] = useState<Issue | null>(null);
   const choosable = agents.filter((a) => !a.archived_at).sort((a, b) => a.name.localeCompare(b.name, "da"));
   const agent = choosable.find((a) => a.id === agentId);
   const create = useMutation({
-    mutationFn: () =>
-      api.createIssue({
+    mutationFn: async () => {
+      // Images go up first, then sit on the issue and inline in its description for the agent to see.
+      const attachments = await Promise.all(images.map((f) => api.uploadFile(f)));
+      const body = [description.trim(), ...attachments.map((a) => `![${a.filename}](${a.url})`)].filter(Boolean).join("\n\n");
+      return api.createIssue({
         title: title.trim(),
-        description: description.trim() || undefined,
+        description: body || undefined,
         project_id: projectId,
         status: agentId && startNow ? "todo" : "backlog",
         ...(agentId ? { assignee_type: "agent" as const, assignee_id: agentId } : {}),
-      }),
+        ...(attachments.length ? { attachment_ids: attachments.map((a) => a.id) } : {}),
+      });
+    },
     onSuccess: (issue) => {
       setCreated(issue);
       setTitle("");
       setDescription("");
+      setImages([]);
       qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", projectId] });
       if (workspace?.id) qc.invalidateQueries({ queryKey: issueKeys.all(workspace.id) });
     },
@@ -606,8 +613,10 @@ export function NewTask({ projectId, projectName, agents }: { projectId: string;
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted-foreground">Beskrivelse</span>
         <textarea id="portfolio-task-description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
+          onPaste={pasteImages(setImages)}
           className="rounded-md border bg-background px-2 py-1.5" placeholder="Baggrund, hvad er færdigt, hvad skal undgås …" />
       </label>
+      <ImagePicker id="portfolio-task-images" images={images} setImages={setImages} />
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted-foreground">Agent</span>
         <select id="portfolio-task-agent" value={agentId} onChange={(e) => setAgentId(e.target.value)} className="rounded-md border bg-background px-2 py-1.5">
@@ -1083,6 +1092,49 @@ const today = () => {
 const MAX_IMAGES = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
+/** Keep the images among `files` that fit, up to the limit. */
+function withImages(cur: File[], files: Iterable<File>): File[] {
+  const ok = Array.from(files).filter((f) => f.type.startsWith("image/") && f.size <= MAX_IMAGE_BYTES);
+  return [...cur, ...ok].slice(0, MAX_IMAGES);
+}
+
+/** Paste handler for a text field: a pasted screenshot becomes an image instead of text. */
+function pasteImages(setImages: (fn: (cur: File[]) => File[]) => void) {
+  return (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); setImages((cur) => withImages(cur, files)); }
+  };
+}
+
+/** Image field shared by «Ny opgave» and «Tilføj opdatering»: thumbnails, remove, add. */
+function ImagePicker({ id, images, setImages, note }: { id: string; images: File[]; setImages: (fn: (cur: File[]) => File[]) => void; note?: string }) {
+  const previews = useMemo(() => images.map((f) => URL.createObjectURL(f)), [images]);
+  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <span className="text-muted-foreground">Billeder <span className="text-xs">(valgfrit · højst {MAX_IMAGES}, op til 10 MB hver · du kan også indsætte et skærmbillede i tekstfeltet)</span></span>
+      <div className="flex flex-wrap items-center gap-2">
+        {images.map((f, i) => (
+          <span key={`${f.name}-${i}`} className="relative">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview; next/image cannot load it */}
+            <img src={previews[i]} alt={f.name} className="size-20 rounded-md border object-cover" />
+            <button type="button" onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))} aria-label={`Fjern ${f.name}`}
+              className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border bg-background text-xs hover:bg-accent">×</button>
+          </span>
+        ))}
+        {images.length < MAX_IMAGES && (
+          <label className="grid size-20 cursor-pointer place-items-center rounded-md border border-dashed text-xs text-muted-foreground hover:bg-accent">
+            + Billede
+            <input id={id} type="file" accept="image/*" multiple className="sr-only"
+              onChange={(e) => { const files = e.target.files ?? []; setImages((cur) => withImages(cur, files)); e.target.value = ""; }} />
+          </label>
+        )}
+      </div>
+      {images.length > 0 && note && <span className="text-xs text-muted-foreground">{note}</span>}
+    </div>
+  );
+}
+
 export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const p = useWorkspacePaths();
   const qc = useQueryClient();
@@ -1098,12 +1150,6 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const [images, setImages] = useState<File[]>([]);
   const [sent, setSent] = useState<Issue | null>(null);
   const speaker = (who === "__other" ? other : who).trim();
-  const previews = useMemo(() => images.map((f) => URL.createObjectURL(f)), [images]);
-  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
-  const addImages = (files: Iterable<File>) => {
-    const ok = Array.from(files).filter((f) => f.type.startsWith("image/") && f.size <= MAX_IMAGE_BYTES);
-    setImages((cur) => [...cur, ...ok].slice(0, MAX_IMAGES));
-  };
   const projectName = row.dia_spec?.name ?? row.name;
   const send = useMutation({
     mutationFn: async () => {
@@ -1173,29 +1219,12 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
         <label className="flex flex-col gap-1 text-sm sm:col-span-2">
           <span className="text-muted-foreground">Opdateringen</span>
           <textarea id="upd-text" required rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
-            onPaste={(e) => { const files = Array.from(e.clipboardData.files); if (files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); addImages(files); } }}
+            onPaste={pasteImages(setImages)}
             placeholder="Indsæt mailen eller skriv, hvad du fik at vide. Den screenes af GDPR-gaten, før noget kommer i hubben." />
         </label>
-        <div className="flex flex-col gap-2 text-sm sm:col-span-2">
-          <span className="text-muted-foreground">Billeder <span className="text-xs">(valgfrit · højst {MAX_IMAGES}, op til 10 MB hver · du kan også indsætte et skærmbillede i feltet ovenfor)</span></span>
-          <div className="flex flex-wrap items-center gap-2">
-            {images.map((f, i) => (
-              <span key={`${f.name}-${i}`} className="relative">
-                {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview; next/image cannot load it */}
-                <img src={previews[i]} alt={f.name} className="size-20 rounded-md border object-cover" />
-                <button type="button" onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))} aria-label={`Fjern ${f.name}`}
-                  className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border bg-background text-xs hover:bg-accent">×</button>
-              </span>
-            ))}
-            {images.length < MAX_IMAGES && (
-              <label className="grid size-20 cursor-pointer place-items-center rounded-md border border-dashed text-xs text-muted-foreground hover:bg-accent">
-                + Billede
-                <input id="upd-images" type="file" accept="image/*" multiple className="sr-only"
-                  onChange={(e) => { addImages(e.target.files ?? []); e.target.value = ""; }} />
-              </label>
-            )}
-          </div>
-          {images.length > 0 && <span className="text-xs text-muted-foreground">GDPR-gaten ser også billederne. Viser et billede personer eller persondata, kommer det ikke i hubben.</span>}
+        <div className="sm:col-span-2">
+          <ImagePicker id="upd-images" images={images} setImages={setImages}
+            note="GDPR-gaten ser også billederne. Viser et billede personer eller persondata, kommer det ikke i hubben." />
         </div>
       </div>
       {send.error && <p className="text-sm text-[#CF022D]">Kunne ikke sende: {(send.error as Error).message}</p>}

@@ -4,7 +4,7 @@ const api = vi.hoisted(() => ({ listIssues: vi.fn(), listProjects: vi.fn(), crea
   getIssue: vi.fn(), updateIssue: vi.fn(), setIssueMetadataKey: vi.fn(), deleteIssue: vi.fn() }));
 vi.mock("@multica/core/api", () => ({ api }));
 import { loadUsage, removeUsage, saveUsage } from "./capex-usage-api";
-import { compactUsage, usageMetadata } from "./capex-usage";
+import { compactUsage, scaleUsage, usageMetadata } from "./capex-usage";
 
 const entry = compactUsage({ id: "manual-id", label: "Manuel post", capex_id: "1000",
   days: [{ date: "2026-10-28", tokens: 100, usd: 2 }] }, "2026-10-28");
@@ -35,6 +35,22 @@ describe("usage issue persistence", () => {
     await saveUsage({ ...entry, capex_id: "1005", issueId: issue.id });
     const call = api.setIssueMetadataKey.mock.calls.find((c) => c[1] === "capex_usage_data");
     expect(JSON.parse(call?.[2] as string)).toMatchObject({ capex_id: "1005", months: { "2026-10": [200, 4] } });
+  });
+  it("Ret replaces the whole entry when the stored one is unchanged", async () => {
+    api.listIssues.mockResolvedValue({ issues: [issue] });
+    const loaded = { ...entry, issueId: issue.id };
+    await saveUsage({ ...scaleUsage(loaded, 300, 6), label: "Rettet" }, loaded);
+    const call = api.setIssueMetadataKey.mock.calls.find((c) => c[1] === "capex_usage_data");
+    expect(JSON.parse(call?.[2] as string)).toMatchObject({ label: "Rettet", months: { "2026-10": [300, 6] }, days: { "2026-10-28": [300, 6] } });
+  });
+  it("Ret refuses a stale entry and imported entries", async () => {
+    const fresh = { ...entry, months: { "2026-10": [200, 4] as [number, number] } };
+    api.listIssues.mockResolvedValue({ issues: [{ ...issue, metadata: usageMetadata(fresh) }] });
+    const loaded = { ...entry, issueId: issue.id };
+    await expect(saveUsage(scaleUsage(loaded, 300, 6), loaded)).rejects.toThrow("genindlæs");
+    const imported = { ...entry, id: "codex-vibe-hub", issueId: issue.id };
+    await expect(saveUsage(imported, imported)).rejects.toThrow();
+    expect(api.setIssueMetadataKey).not.toHaveBeenCalled();
   });
   it("Remove deletes only the matching usage issue", async () => {
     await removeUsage({ ...entry, issueId: issue.id });

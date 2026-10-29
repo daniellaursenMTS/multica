@@ -1,6 +1,6 @@
 import { api } from "@multica/core/api";
 import type { Issue, IssueMetadata } from "@multica/core/types";
-import { usageMetadata, usageSchema, type CapexManual } from "./capex-usage";
+import { importedUsage, usageMetadata, usageSchema, type CapexManual } from "./capex-usage";
 
 async function allIssues(metadata?: IssueMetadata, projectId?: string): Promise<Issue[]> {
   const issues: Issue[] = [];
@@ -25,8 +25,15 @@ export async function loadUsage(): Promise<CapexManual[]> {
   });
 }
 
-export async function saveUsage(entry: CapexManual): Promise<void> {
+/**
+ * Without `base`, an edit of a stored entry changes only its allocation and keeps the stored
+ * numbers. With `base` (the entry as loaded) the whole entry is replaced, provided nobody changed
+ * it since; imported entries refuse that, because the nightly import owns their numbers.
+ */
+export async function saveUsage(entry: CapexManual, base?: CapexManual): Promise<void> {
+  if (base && (!base.issueId || base.id !== entry.id || importedUsage(entry.id))) throw new Error("Posten kan ikke rettes her");
   const metadata = usageMetadata(entry);
+  const issueId = base?.issueId ?? entry.issueId;
   const projects = (await api.listProjects()).projects.filter((p) => p.title === "Multica-opsætning");
   const project = projects[0];
   if (projects.length !== 1 || !project) throw new Error("Projektet Multica-opsætning findes ikke entydigt");
@@ -35,11 +42,14 @@ export async function saveUsage(entry: CapexManual): Promise<void> {
   if (!matches.length) matches = (await allIssues(undefined, project.id)).filter((i) => i.title === title);
   if (matches.length > 1) throw new Error("Dubleret forbrugspost");
   const previous = matches[0];
-  if (entry.issueId && previous?.id !== entry.issueId) throw new Error("Posten er ændret; genindlæs siden");
+  if (issueId && previous?.id !== issueId) throw new Error("Posten er ændret; genindlæs siden");
   const issue = previous ?? await api.createIssue({ title, project_id: project.id, status: "done" });
-  // Allocation edits must retain a concurrently refreshed import snapshot.
+  // Allocation edits must retain a concurrently refreshed import snapshot; a full edit must not overwrite one.
   let data = metadata.capex_usage_data;
-  if (previous && entry.issueId && typeof previous.metadata.capex_usage_data === "string") {
+  if (base) {
+    const stored = typeof previous?.metadata.capex_usage_data === "string" ? usageSchema.parse(JSON.parse(previous.metadata.capex_usage_data)) : null;
+    if (JSON.stringify(stored) !== JSON.stringify(usageSchema.parse(base))) throw new Error("Posten er ændret; genindlæs siden");
+  } else if (previous && issueId && typeof previous.metadata.capex_usage_data === "string") {
     const current = usageSchema.parse(JSON.parse(previous.metadata.capex_usage_data));
     const { capex_id: _capex, project_id: _project, ...rest } = current;
     data = usageMetadata({ ...rest, ...(entry.project_id ? { project_id: entry.project_id } : { capex_id: entry.capex_id ?? null }) }).capex_usage_data;

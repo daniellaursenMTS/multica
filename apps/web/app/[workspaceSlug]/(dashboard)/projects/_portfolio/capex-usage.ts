@@ -88,3 +88,41 @@ export function usageTotal(entry: CapexManual, from = "0000-01-01", to = "9999-1
   }
   return total;
 }
+
+/** Entries the nightly importers own (Claude Code, Codex). They rewrite name and numbers; only the allocation survives. */
+export const importedUsage = (id: string) => id.startsWith("claude-code-") || id.startsWith("codex-");
+
+/**
+ * First and last day with usage. A month older than `daily_from` only knows its total, so it
+ * counts from its first or to its last undated day.
+ */
+export function usageRange(entry: CapexManual): { from: string; to: string } | null {
+  const used = Object.keys(entry.months).filter((m) => entry.months[m]!.some((v) => v > 0)).sort();
+  const first = used.at(0), last = used.at(-1);
+  if (!first || !last) return null;
+  const kept = (month: string) => Object.keys(entry.days).filter((d) => d.startsWith(month) && entry.days[d]!.some((v) => v > 0)).sort();
+  // Undated usage is whatever of the month total its kept days do not explain.
+  const undated = (month: string) => [0, 1].some((i) =>
+    entry.months[month]![i]! - kept(month).reduce((a, d) => a + entry.days[d]![i]!, 0) > 1e-6);
+  const firstKept = kept(first).at(0), lastKept = kept(last).at(-1);
+  const end = new Date(Date.UTC(Number(last.slice(0, 4)), Number(last.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const lastUndated = daysBefore(entry.daily_from, 1);
+  return { from: firstKept && !undated(first) ? firstKept : `${first}-01`, to: lastKept ?? (end < lastUndated ? end : lastUndated) };
+}
+
+/**
+ * New totals on the stored distribution: every month and retained day is scaled by the same
+ * factor, so months still include their days. A dimension that was zero borrows the other's
+ * distribution.
+ */
+export function scaleUsage(entry: CapexManual, tokens: number, usd: number): CapexManual {
+  pair.parse([tokens, usd]);
+  const old = usageTotal(entry);
+  if (old.tokens <= 0 && old.usd <= 0) throw new Error("Posten har intet forbrug at skalere");
+  const totals = [old.tokens, old.usd];
+  const share = (p: [number, number], i: 0 | 1) => (totals[i]! > 0 ? p[i] / totals[i]! : p[1 - i]! / totals[1 - i]!);
+  const scale = (values: Record<string, [number, number]>) => Object.fromEntries(Object.entries(values).map(([k, p]) =>
+    [k, [Number((tokens * share(p, 0)).toFixed(8)), Number((usd * share(p, 1)).toFixed(8))]]));
+  const { issueId: _issueId, ...data } = entry;
+  return usageSchema.parse({ ...data, months: scale(entry.months), days: scale(entry.days) });
+}

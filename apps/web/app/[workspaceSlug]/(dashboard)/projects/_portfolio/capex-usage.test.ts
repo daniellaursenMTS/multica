@@ -16,15 +16,22 @@ describe("compact usage accounting", () => {
     expect(entry.daily_from).toBe("2026-09-14");
   });
   it("uses monthly history for old months, quarters and year-to-date without double counting", () => {
-    expect(usageTotal(entry, "2026-07-01", "2026-07-31")).toEqual({ tokens: 30, usd: 0.3 });
-    expect(usageTotal(entry, "2026-07-01", "2026-09-30")).toEqual({ tokens: 150, usd: 1.5 });
-    expect(usageTotal(entry, "2026-01-01", "2026-10-28")).toEqual({ tokens: 210, usd: 2.1 });
+    expect(usageTotal(entry, "2026-07-01", "2026-07-31")).toEqual({ tokens: 30, usd: 0.3, approx: false });
+    expect(usageTotal(entry, "2026-07-01", "2026-09-30")).toEqual({ tokens: 150, usd: 1.5, approx: false });
+    expect(usageTotal(entry, "2026-01-01", "2026-10-28")).toEqual({ tokens: 210, usd: 2.1, approx: false });
   });
   it("calculates rolling 30 days exactly across a month boundary", () => {
-    expect(usageTotal(entry, "2026-09-29", "2026-10-28")).toEqual({ tokens: 110, usd: 1.1 });
+    expect(usageTotal(entry, "2026-09-29", "2026-10-28")).toEqual({ tokens: 110, usd: 1.1, approx: false });
   });
-  it("refuses invented precision for old partial months", () => {
-    expect(() => usageTotal(entry, "2026-07-15", "2026-07-31")).toThrow("hele måneder");
+  it("estimates old partial months evenly from the month total and says so", () => {
+    // July has no daily figures left: 17 of its 31 days get 17/31 of the month.
+    const july = usageTotal(entry, "2026-07-15", "2026-07-31");
+    expect(july.approx).toBe(true);
+    expect(july.tokens).toBeCloseTo(30 * 17 / 31, 8);
+    // September before daily_from (1-13): the month minus its kept days (30) spread over 13 days.
+    const sep = usageTotal(entry, "2026-09-07", "2026-09-29");
+    expect(sep.approx).toBe(true);
+    expect(sep.tokens).toBeCloseTo(30 * 7 / 13 + 40 + 50, 8);
   });
   it("supports fractional hand-entered amounts spread across month boundaries", () => {
     const manual = compactUsage({ ...draft, days: [

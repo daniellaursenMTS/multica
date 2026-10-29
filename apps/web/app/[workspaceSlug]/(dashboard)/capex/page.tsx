@@ -53,13 +53,14 @@ const nfKr = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK"
 const nfPct = new Intl.NumberFormat("da-DK", { style: "percent", maximumFractionDigits: 1 });
 const tokensOf = (r: DashboardUsageDaily) => r.input_tokens + r.output_tokens;
 
-interface Line { key: string; number: string; description: string; projects: string[]; tokens: number; usd: number; color: string; item?: CapexItem; special?: boolean }
+interface Line { key: string; number: string; description: string; projects: string[]; tokens: number; usd: number; color: string; item?: CapexItem; special?: boolean; approx?: boolean }
 
-function Donut({ lines, total, hover, setHover }: { lines: Line[]; total: number; hover: string | null; setHover: (k: string | null) => void }) {
+/** Shares are of the estimated price: tokens are not comparable across models. `total` is in USD. */
+function Donut({ lines, total, rate, hover, setHover }: { lines: Line[]; total: number; rate: number; hover: string | null; setHover: (k: string | null) => void }) {
   const R = 96, r = 62, C = 120;
   let a0 = -Math.PI / 2;
-  const arcs = lines.filter((l) => l.tokens > 0).map((l) => {
-    const a1 = a0 + (l.tokens / total) * Math.PI * 2;
+  const arcs = lines.filter((l) => l.usd > 0).map((l) => {
+    const a1 = a0 + (l.usd / total) * Math.PI * 2;
     const big = a1 - a0 > Math.PI ? 1 : 0;
     const p = (rad: number, ang: number) => `${C + rad * Math.cos(ang)} ${C + rad * Math.sin(ang)}`;
     const d = a1 - a0 >= Math.PI * 2 - 1e-6
@@ -70,16 +71,16 @@ function Donut({ lines, total, hover, setHover }: { lines: Line[]; total: number
   });
   const focus = lines.find((l) => l.key === hover);
   return (
-    <svg viewBox="0 0 240 240" className="h-60 w-60 shrink-0" role="img" aria-label="Fordeling af tokens på Capex">
+    <svg viewBox="0 0 240 240" className="h-60 w-60 shrink-0" role="img" aria-label="Fordeling af anslået pris på Capex">
       {arcs.map(({ l, d }) => (
         <path key={l.key} d={d} fill={l.color} stroke="var(--background)" strokeWidth={2}
           opacity={hover && hover !== l.key ? 0.35 : 1} onMouseEnter={() => setHover(l.key)} onMouseLeave={() => setHover(null)}>
-          <title>{`${l.number} · ${nfPct.format(l.tokens / total)} · ${nfTokens.format(l.tokens)} tokens`}</title>
+          <title>{`${l.number} · ${nfPct.format(l.usd / total)} · ${nfKr.format(l.usd * rate)} · ${nfTokens.format(l.tokens)} tokens`}</title>
         </path>
       ))}
-      <text x={C} y={C - 6} textAnchor="middle" fontSize="13" fill="var(--muted-foreground)">{focus ? focus.number : "Tokens i alt"}</text>
+      <text x={C} y={C - 6} textAnchor="middle" fontSize="13" fill="var(--muted-foreground)">{focus ? focus.number : "Anslået pris"}</text>
       <text x={C} y={C + 16} textAnchor="middle" fontSize="20" fontWeight="600" fill="var(--foreground)">
-        {focus ? nfPct.format(focus.tokens / total) : nfTokens.format(total)}
+        {focus ? nfPct.format(focus.usd / total) : nfKr.format(total * rate)}
       </text>
     </svg>
   );
@@ -190,9 +191,10 @@ export default function CapexPage() {
       const owner = m.project_id ? projects.find((r) => r.multica_project === m.project_id) : undefined;
       const target = byCapex.get(String(owner ? owner.fields.capex_id ?? "" : m.capex_id ?? "")) ?? none;
       target.tokens += u.tokens; target.usd += u.usd; target.projects.push(`${m.label} (manuel)`);
+      target.approx ||= u.approx;
       manual += u.tokens;
     });
-    const list = [...byCapex.values()].sort((a, b) => b.tokens - a.tokens);
+    const list = [...byCapex.values()].sort((a, b) => b.usd - a.usd);
     return { lines: [...list, none, noProject], total: Math.max(all.tokens, inProjects.tokens) + manual };
   }, [capex.data, projects, usage, period]);
 
@@ -219,8 +221,8 @@ export default function CapexPage() {
   if (!isAdmin) return <div className="p-6 text-sm text-muted-foreground">Capex er kun for administratorer af workspacet.</div>;
 
   const totalUsd = lines.reduce((a, l) => a + l.usd, 0);
-  const uncovered = lines.filter((l) => l.special).reduce((a, l) => a + l.tokens, 0);
-  const pct = (n: number) => (total > 0 ? nfPct.format(n / total) : "—");
+  const uncovered = lines.filter((l) => l.special).reduce((a, l) => a + l.usd, 0);
+  const pct = (usd: number) => (totalUsd > 0 ? nfPct.format(usd / totalUsd) : "—");
 
   return (
     <div className="capex-root h-full min-h-0 flex-1 overflow-y-auto">
@@ -229,7 +231,7 @@ export default function CapexPage() {
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Capex</h1>
-            <p className="text-sm text-muted-foreground">Agenternes tokenforbrug pr. Capex-nummer. Et projekt vælger sit Capex under «Opdater felter».</p>
+            <p className="text-sm text-muted-foreground">Agenternes forbrug pr. Capex-nummer. Andelen regnes på anslået pris, fordi tokens ikke kan sammenlignes på tværs af modeller. Et projekt vælger sit Capex under «Opdater felter».</p>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Periode</span>
@@ -242,7 +244,7 @@ export default function CapexPage() {
         {capex.error && <p role="alert" className="text-sm text-[#CF022D]">Kunne ikke hente forbrug: {capex.error.message}</p>}
         {usageSave.error && <p role="alert" className="text-sm text-[#CF022D]">Kunne ikke gemme forbrug: {usageSave.error.message}</p>}
         <section className="grid gap-3 sm:grid-cols-3" aria-label="Nøgletal">
-          {[["Tokens", nfTokens.format(total), "input og output"], ["Anslået pris", nfKr.format(totalUsd * rate), `listepris, kurs ${rate.toLocaleString("da-DK")}`], ["Uden Capex", pct(uncovered), "uden Capex eller projekt"]].map(([k, v, s]) => (
+          {[["Tokens", nfTokens.format(total), "input og output"], ["Anslået pris", nfKr.format(totalUsd * rate), `listepris, kurs ${rate.toLocaleString("da-DK")}`], ["Uden Capex", pct(uncovered), "af prisen, uden Capex eller projekt"]].map(([k, v, s]) => (
             <div key={k} className="rounded-lg border px-4 py-3">
               <div className="text-xs text-muted-foreground">{k}</div>
               <div className="text-2xl font-semibold tabular-nums">{loading ? "…" : v}</div>
@@ -252,13 +254,13 @@ export default function CapexPage() {
         </section>
 
         <section className="flex flex-wrap items-center gap-8 rounded-lg border p-4" aria-label="Fordeling">
-          {total > 0 ? <Donut lines={lines} total={total} hover={hover} setHover={setHover} /> : <p className="text-sm text-muted-foreground">{loading ? "Henter forbrug …" : "Intet forbrug i perioden."}</p>}
+          {totalUsd > 0 ? <Donut lines={lines} total={totalUsd} rate={rate} hover={hover} setHover={setHover} /> : <p className="text-sm text-muted-foreground">{loading ? "Henter forbrug …" : "Intet forbrug i perioden."}</p>}
           <ul className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm">
-            {lines.filter((l) => l.tokens > 0).map((l) => (
+            {lines.filter((l) => l.usd > 0).map((l) => (
               <li key={l.key} className={`flex items-center gap-2 rounded px-1 ${hover === l.key ? "bg-accent" : ""}`} onMouseEnter={() => setHover(l.key)} onMouseLeave={() => setHover(null)}>
                 <span className="size-3 shrink-0 rounded-sm" style={{ background: l.color }} aria-hidden="true" />
                 <span className="truncate">{l.number}{!l.special && <span className="text-muted-foreground"> · {l.description}</span>}</span>
-                <span className="ml-auto tabular-nums text-muted-foreground">{pct(l.tokens)}</span>
+                <span className="ml-auto tabular-nums text-muted-foreground">{pct(l.usd)}</span>
               </li>
             ))}
           </ul>
@@ -277,7 +279,7 @@ export default function CapexPage() {
                 <tr className="border-b">
                   <th className="px-3 py-2 font-medium">Capex-nr.</th><th className="px-3 py-2 font-medium">Beskrivelse</th>
                   <th className="px-3 py-2 font-medium">Projekter</th><th className="px-3 py-2 text-right font-medium">Tokens</th>
-                  <th className="px-3 py-2 text-right font-medium">Anslået pris</th><th className="px-3 py-2" /><th className="px-3 py-2 text-right font-medium">Andel</th>
+                  <th className="px-3 py-2 text-right font-medium">Anslået pris</th><th className="px-3 py-2" /><th className="px-3 py-2 text-right font-medium" title="Andel af den anslåede pris">Andel</th>
                 </tr>
               </thead>
               <tbody>
@@ -293,14 +295,14 @@ export default function CapexPage() {
                       <td className="px-3 py-2">{l.description}</td>
                       <td className="px-3 py-2 text-muted-foreground">{l.projects.length ? l.projects.join(", ") : "—"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{loading ? "…" : nfTokens.format(l.tokens)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{loading ? "…" : nfKr.format(l.usd * rate)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" title={l.approx ? "Delvist fordelt ud fra månedstal: perioden går længere tilbage end dagstallene" : undefined}>{loading ? "…" : `${l.approx ? "≈ " : ""}${nfKr.format(l.usd * rate)}`}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {l.item && (<>
                           <button type="button" onClick={() => setEditing(l.key)} className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">Ret</button>{" "}
                           <button type="button" onClick={() => toggle(l.key)} disabled={save.isPending} className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">{l.item.active ? "Luk" : "Genåbn"}</button>
                         </>)}
                       </td>
-                      <td className="px-3 py-2 text-right font-medium tabular-nums">{loading ? "…" : pct(l.tokens)}</td>
+                      <td className="px-3 py-2 text-right font-medium tabular-nums">{loading ? "…" : pct(l.usd)}</td>
                     </>)}
                   </tr>
                 ))}

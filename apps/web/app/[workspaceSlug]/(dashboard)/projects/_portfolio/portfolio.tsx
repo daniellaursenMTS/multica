@@ -360,12 +360,12 @@ function useProjectUsage(rows: Row[], manual: CapexManual[]) {
   return useMemo(() => {
     const to = usageToday();
     const from = daysBefore(to, USAGE_DAYS - 1);
-    const out = new Map<string, { tokens: number; usd: number }>();
+    const out = new Map<string, { tokens: number; usd: number; approx: boolean }>();
     ids.forEach((pid, i) => {
       const data = res[i]?.data as DashboardUsageDaily[] | undefined;
-      const u = (data ?? []).filter((d) => d.date >= from && d.date <= to).reduce((a, d) => ({ tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0 });
+      const u = (data ?? []).filter((d) => d.date >= from && d.date <= to).reduce((a, d) => ({ ...a, tokens: a.tokens + d.input_tokens + d.output_tokens, usd: a.usd + estimateCost(d) }), { tokens: 0, usd: 0, approx: false });
       manual.filter((m) => m.project_id === pid).forEach((m) => {
-        const extra = usageTotal(m, from, to); u.tokens += extra.tokens; u.usd += extra.usd;
+        const extra = usageTotal(m, from, to); u.tokens += extra.tokens; u.usd += extra.usd; u.approx ||= extra.approx;
       });
       out.set(pid, u);
     });
@@ -449,9 +449,9 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
                   {hasUsage && (
                     <td className="px-3 py-2.5">
                       {u && u.tokens > 0 ? (
-                        <span className="flex flex-col gap-1" title={`${u.tokens.toLocaleString("da-DK")} tokens · anslået ${nfKr.format(u.usd * rate)}`}>
+                        <span className="flex flex-col gap-1" title={`${Math.round(u.tokens).toLocaleString("da-DK")} tokens · anslået ${nfKr.format(u.usd * rate)}${u.approx ? " · delvist fordelt ud fra månedstal" : ""}`}>
                           <span className="flex items-baseline justify-center gap-2 tabular-nums">
-                            <span>{nfTokens.format(u.tokens)}</span>
+                            <span>{u.approx && "≈ "}{nfTokens.format(u.tokens)}</span>
                             <span className="text-xs text-muted-foreground">{nfKr.format(u.usd * rate)}</span>
                           </span>
                           <span className="h-1 rounded-full bg-muted">

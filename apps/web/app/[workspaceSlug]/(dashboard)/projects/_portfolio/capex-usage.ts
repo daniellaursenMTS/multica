@@ -53,22 +53,37 @@ export function usageMetadata(entry: CapexManual) {
   return metadata;
 }
 
-/** Whole months from history; partial recent months from days. Never add both. */
+const dayCount = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+
+/**
+ * Whole months from history; partial recent months from days. Never add both.
+ * A partial month older than `daily_from` has no daily figures left: its share is then
+ * estimated evenly from the month total and `approx` is set, so the UI can mark it.
+ */
 export function usageTotal(entry: CapexManual, from = "0000-01-01", to = "9999-12-31") {
-  const total = { tokens: 0, usd: 0 };
+  const total = { tokens: 0, usd: 0, approx: false };
   for (const [month, p] of Object.entries(entry.months)) {
     const start = `${month}-01`;
     const end = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
     if (end < from || start > to) continue;
     if (from <= start && (to >= end || to >= entry.through)) {
       total.tokens += p[0]; total.usd += p[1];
-    } else {
-      if (from < entry.daily_from && start < entry.daily_from) {
-        throw new Error("Ældre forbrug kan kun vises for hele måneder.");
-      }
-      for (const [date, day] of Object.entries(entry.days)) if (date.startsWith(month) && date >= from && date <= to) {
-        total.tokens += day[0]; total.usd += day[1];
-      }
+      continue;
+    }
+    let keptTokens = 0, keptUsd = 0;
+    for (const [date, day] of Object.entries(entry.days)) if (date.startsWith(month)) {
+      keptTokens += day[0]; keptUsd += day[1];
+      if (date >= from && date <= to) { total.tokens += day[0]; total.usd += day[1]; }
+    }
+    const lo = from > start ? from : start;
+    if (lo < entry.daily_from) {
+      const lastUndated = daysBefore(entry.daily_from, 1);
+      const undated = dayCount(start, end < lastUndated ? end : lastUndated);
+      const wanted = dayCount(lo, [to, end, lastUndated].sort()[0]!);
+      const share = wanted / undated;
+      total.tokens += Math.max(0, p[0] - keptTokens) * share;
+      total.usd += Math.max(0, p[1] - keptUsd) * share;
+      total.approx = true;
     }
   }
   return total;

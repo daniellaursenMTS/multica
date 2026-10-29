@@ -1080,6 +1080,9 @@ const today = () => {
 
 /** «Tilføj opdatering»: a written update from someone in the diamond goes the same way as an Opus
  *  note — Orchestrator, GDPR gate, Hub-skriver — so it is screened before it reaches the hub. */
+const MAX_IMAGES = 5;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
 export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const p = useWorkspacePaths();
   const qc = useQueryClient();
@@ -1092,27 +1095,39 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const [other, setOther] = useState("");
   const [day, setDay] = useState(today);
   const [text, setText] = useState("");
+  const [images, setImages] = useState<File[]>([]);
   const [sent, setSent] = useState<Issue | null>(null);
   const speaker = (who === "__other" ? other : who).trim();
+  const previews = useMemo(() => images.map((f) => URL.createObjectURL(f)), [images]);
+  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
+  const addImages = (files: Iterable<File>) => {
+    const ok = Array.from(files).filter((f) => f.type.startsWith("image/") && f.size <= MAX_IMAGE_BYTES);
+    setImages((cur) => [...cur, ...ok].slice(0, MAX_IMAGES));
+  };
   const projectName = row.dia_spec?.name ?? row.name;
   const send = useMutation({
     mutationFn: async () => {
       if (!orchestrator) throw new Error(`Agenten «${ORCHESTRATOR_NAME}» findes ikke.`);
+      // Images go up first and ride along on the issue; the GDPR gate decides whether each may reach the hub.
+      const attachments = await Promise.all(images.map((f) => api.uploadFile(f)));
       const issue = await api.createIssue({
         title: `Opdatering: ${projectName} — ${speaker}, ${day}`, project_id: row.multica_project ?? undefined, status: "backlog",
         assignee_type: "agent", assignee_id: orchestrator.id, allow_duplicate: true,
-        description: `Projekt: ${projectName} · Taler: ${speaker} · Dato: ${day}\n\n${text.trim()}\n`,
+        attachment_ids: attachments.map((a) => a.id),
+        description: `Projekt: ${projectName} · Taler: ${speaker} · Dato: ${day}\n\n${text.trim()}\n`
+          + (attachments.length ? `\nBilleder: ${attachments.length} vedhæftet. GDPR-gaten afgør, om de må komme i hubben.\n` : ""),
       });
       // The same markers an Opus note carries, set before the run starts.
       await api.setIssueMetadataKey(issue.id, "intake_source", "opus_mcp");
       await api.setIssueMetadataKey(issue.id, "gdpr_review_only", true);
       await api.setIssueMetadataKey(issue.id, "intake_request_id", crypto.randomUUID());
       await api.setIssueMetadataKey(issue.id, "note_source", "project_page");
+      if (attachments.length) await api.setIssueMetadataKey(issue.id, "note_images", attachments.length);
       await api.updateIssue(issue.id, { status: "todo" });
       return issue;
     },
     onSuccess: (issue) => {
-      setSent(issue); setOpen(false); setText(""); setWho(""); setOther(""); setDay(today());
+      setSent(issue); setOpen(false); setText(""); setImages([]); setWho(""); setOther(""); setDay(today());
       if (row.multica_project) qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", row.multica_project] });
     },
   });
@@ -1158,8 +1173,30 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
         <label className="flex flex-col gap-1 text-sm sm:col-span-2">
           <span className="text-muted-foreground">Opdateringen</span>
           <textarea id="upd-text" required rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
+            onPaste={(e) => { const files = Array.from(e.clipboardData.files); if (files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); addImages(files); } }}
             placeholder="Indsæt mailen eller skriv, hvad du fik at vide. Den screenes af GDPR-gaten, før noget kommer i hubben." />
         </label>
+        <div className="flex flex-col gap-2 text-sm sm:col-span-2">
+          <span className="text-muted-foreground">Billeder <span className="text-xs">(valgfrit · højst {MAX_IMAGES}, op til 10 MB hver · du kan også indsætte et skærmbillede i feltet ovenfor)</span></span>
+          <div className="flex flex-wrap items-center gap-2">
+            {images.map((f, i) => (
+              <span key={`${f.name}-${i}`} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview; next/image cannot load it */}
+                <img src={previews[i]} alt={f.name} className="size-20 rounded-md border object-cover" />
+                <button type="button" onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))} aria-label={`Fjern ${f.name}`}
+                  className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border bg-background text-xs hover:bg-accent">×</button>
+              </span>
+            ))}
+            {images.length < MAX_IMAGES && (
+              <label className="grid size-20 cursor-pointer place-items-center rounded-md border border-dashed text-xs text-muted-foreground hover:bg-accent">
+                + Billede
+                <input id="upd-images" type="file" accept="image/*" multiple className="sr-only"
+                  onChange={(e) => { addImages(e.target.files ?? []); e.target.value = ""; }} />
+              </label>
+            )}
+          </div>
+          {images.length > 0 && <span className="text-xs text-muted-foreground">GDPR-gaten ser også billederne. Viser et billede personer eller persondata, kommer det ikke i hubben.</span>}
+        </div>
       </div>
       {send.error && <p className="text-sm text-[#CF022D]">Kunne ikke sende: {(send.error as Error).message}</p>}
       <div className="flex gap-2">

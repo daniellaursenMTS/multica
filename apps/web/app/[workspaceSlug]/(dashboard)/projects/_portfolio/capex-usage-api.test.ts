@@ -36,6 +36,13 @@ describe("usage issue persistence", () => {
     const call = api.setIssueMetadataKey.mock.calls.find((c) => c[1] === "capex_usage_data");
     expect(JSON.parse(call?.[2] as string)).toMatchObject({ capex_id: "1005", months: { "2026-10": [200, 4] } });
   });
+  it("renames an entry without discarding a fresher imported snapshot", async () => {
+    const fresh = { ...entry, months: { "2026-10": [200, 4] as [number, number] } };
+    api.listIssues.mockResolvedValue({ issues: [{ ...issue, metadata: usageMetadata(fresh) }] });
+    await saveUsage({ ...entry, label: "Nyt navn", issueId: issue.id });
+    const call = api.setIssueMetadataKey.mock.calls.find((c) => c[1] === "capex_usage_data");
+    expect(JSON.parse(call?.[2] as string)).toMatchObject({ label: "Nyt navn", capex_id: "1000", months: { "2026-10": [200, 4] } });
+  });
   it("Ret replaces the whole entry when the stored one is unchanged", async () => {
     api.listIssues.mockResolvedValue({ issues: [issue] });
     const loaded = { ...entry, issueId: issue.id };

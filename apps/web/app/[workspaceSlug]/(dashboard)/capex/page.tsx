@@ -111,6 +111,19 @@ function spread(from: string, to: string, tokens: number, usd: number): CapexDay
   return days.map((date) => ({ date, tokens: tokens / days.length, usd: usd / days.length }));
 }
 
+/** Name only, for imported entries: the nightly import owns their numbers but keeps the name. */
+function RenameForm({ entry, onSave, onCancel, busy }: { entry: CapexManual; onSave: (label: string) => void; onCancel: () => void; busy: boolean }) {
+  const [label, setLabel] = useState(entry.label);
+  const ok = label.trim() && label.trim() !== entry.label;
+  return (
+    <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (ok) onSave(label.trim()); }}>
+      <input id={`manual-rename-${entry.id}`} value={label} onChange={(e) => setLabel(e.target.value)} aria-label="Nyt navn" className="min-w-48 flex-1 rounded-md border bg-background px-2 py-1 text-sm" autoFocus />
+      <button type="submit" disabled={!ok || busy} className="rounded-md bg-foreground px-2 py-1 text-xs font-medium text-background disabled:opacity-50">{busy ? "Gemmer …" : "Gem"}</button>
+      <button type="button" onClick={onCancel} className="rounded-md border px-2 py-1 text-xs">Annullér</button>
+    </form>
+  );
+}
+
 /**
  * New entry, or «Ret» on a stored one. An edit that keeps the dates scales the stored days and
  * months, so the distribution survives; new dates spread the amounts evenly like a new entry.
@@ -394,7 +407,12 @@ export default function CapexPage() {
                     );
                     return (
                       <tr key={m.id} className="border-b align-top last:border-0">
-                        <td className="px-3 py-2"><div className="font-medium">{m.label}</div>{m.note && <div className="text-xs text-muted-foreground">{m.note}</div>}</td>
+                        <td className="px-3 py-2">
+                          {editing === `rename:${m.id}`
+                            ? <RenameForm entry={m} onSave={(label) => usageSave.mutate({ entry: { ...m, label } })} onCancel={() => setEditing(null)} busy={usageSave.isPending} />
+                            : <div className="font-medium">{m.label}</div>}
+                          {m.note && <div className="text-xs text-muted-foreground">{m.note}</div>}
+                        </td>
                         <td className="px-3 py-2">
                           {m.project_id ? (() => {
                             const owner = projects.find((r) => r.multica_project === m.project_id);
@@ -413,7 +431,10 @@ export default function CapexPage() {
                         <td className="px-3 py-2 text-right tabular-nums">{nfKr.format(t.usd * rate)}</td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">
                           {importedUsage(m.id)
-                            ? <span className="mr-1 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground" title="Navn og tal kommer fra natjobbets import og overskrives hver nat. Capex kan vælges her.">import</span>
+                            ? (<>
+                              <span className="mr-1 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground" title="Tallene kommer fra natjobbets import og opdateres hver nat. Navn og Capex, du vælger her, bevares.">import</span>
+                              <button type="button" disabled={usageSave.isPending} onClick={() => setEditing(`rename:${m.id}`)} className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">Omdøb</button>
+                            </>)
                             : <button type="button" disabled={usageSave.isPending} onClick={() => setEditing(`manual:${m.id}`)} className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">Ret</button>}{" "}
                           <button type="button" disabled={usageSave.isPending} onClick={() => { if (confirm(`Fjern «${m.label}»?`)) usageSave.mutate({ entry: m, remove: true }); }}
                             className="rounded-md border px-2 py-0.5 text-xs hover:bg-accent">Fjern</button>

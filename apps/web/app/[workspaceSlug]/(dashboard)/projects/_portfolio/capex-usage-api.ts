@@ -26,8 +26,8 @@ export async function loadUsage(): Promise<CapexManual[]> {
 }
 
 /**
- * Without `base`, an edit of a stored entry changes only its allocation and keeps the stored
- * numbers. With `base` (the entry as loaded) the whole entry is replaced, provided nobody changed
+ * Without `base`, an edit of a stored entry changes only its name and allocation and keeps the
+ * stored numbers; the nightly import keeps both. With `base` (the entry as loaded) the whole entry is replaced, provided nobody changed
  * it since; imported entries refuse that, because the nightly import owns their numbers.
  */
 export async function saveUsage(entry: CapexManual, base?: CapexManual): Promise<void> {
@@ -52,7 +52,7 @@ export async function saveUsage(entry: CapexManual, base?: CapexManual): Promise
   } else if (previous && issueId && typeof previous.metadata.capex_usage_data === "string") {
     const current = usageSchema.parse(JSON.parse(previous.metadata.capex_usage_data));
     const { capex_id: _capex, project_id: _project, ...rest } = current;
-    data = usageMetadata({ ...rest, ...(entry.project_id ? { project_id: entry.project_id } : { capex_id: entry.capex_id ?? null }) }).capex_usage_data;
+    data = usageMetadata({ ...rest, label: entry.label, ...(entry.project_id ? { project_id: entry.project_id } : { capex_id: entry.capex_id ?? null }) }).capex_usage_data;
   }
   const combined = { ...issue.metadata, ...metadata, capex_usage_data: data };
   if (new TextEncoder().encode(JSON.stringify(combined)).length > 6000) throw new Error("Postens samlede metadata overstiger 6.000 bytes");

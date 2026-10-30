@@ -1135,6 +1135,41 @@ function ImagePicker({ id, images, setImages, note }: { id: string; images: File
   );
 }
 
+const MAX_DECK_BYTES = 25 * 1024 * 1024;
+
+/** Deck field for «Tilføj opdatering»: one .pptx or .pdf. The GDPR gate extracts it locally and
+ *  screens it slide by slide; the file itself stays on the issue and never goes to the hub. */
+function DeckPicker({ id, deck, setDeck }: { id: string; deck: File | null; setDeck: (f: File | null) => void }) {
+  const [error, setError] = useState("");
+  const pick = (f: File | undefined) => {
+    if (!f) return;
+    if (!/\.(pptx|pdf)$/i.test(f.name)) { setError("Kun PowerPoint (.pptx) eller PDF."); return; }
+    if (f.size > MAX_DECK_BYTES) { setError(`${f.name} er over 25 MB.`); return; }
+    setError(""); setDeck(f);
+  };
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <span className="text-muted-foreground">Præsentation <span className="text-xs">(valgfrit · én .pptx eller .pdf, højst 60 slides og 25 MB · speaker notes kommer ikke med)</span></span>
+      {deck ? (
+        <span className="flex items-center gap-2">
+          <span className="rounded-md border px-2 py-1">{deck.name} <span className="text-xs text-muted-foreground">· {Math.max(1, Math.round(deck.size / 1024 / 1024))} MB</span></span>
+          <button type="button" onClick={() => setDeck(null)} aria-label={`Fjern ${deck.name}`}
+            className="grid size-5 place-items-center rounded-full border bg-background text-xs hover:bg-accent">×</button>
+        </span>
+      ) : (
+        <label className="w-fit cursor-pointer rounded-md border border-dashed px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent">
+          + Præsentation
+          <input id={id} type="file" className="sr-only"
+            accept=".pptx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+      )}
+      {error && <span className="text-xs text-[#CF022D]">{error}</span>}
+      {deck && <span className="text-xs text-muted-foreground">GDPR-gaten læser hver slide. Kunder, sundhed, HR og billeder af personer kommer ikke i hubben.</span>}
+    </div>
+  );
+}
+
 export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const p = useWorkspacePaths();
   const qc = useQueryClient();
@@ -1148,6 +1183,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const [day, setDay] = useState(today);
   const [text, setText] = useState("");
   const [images, setImages] = useState<File[]>([]);
+  const [deck, setDeck] = useState<File | null>(null);
   const [sent, setSent] = useState<Issue | null>(null);
   const speaker = (who === "__other" ? other : who).trim();
   const projectName = row.dia_spec?.name ?? row.name;
@@ -1156,12 +1192,15 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
       if (!orchestrator) throw new Error(`Agenten «${ORCHESTRATOR_NAME}» findes ikke.`);
       // Images go up first and ride along on the issue; the GDPR gate decides whether each may reach the hub.
       const attachments = await Promise.all(images.map((f) => api.uploadFile(f)));
+      // So does the deck; the gate extracts it on the Mac and releases slide by slide.
+      const deckFile = deck ? await api.uploadFile(deck) : null;
       const issue = await api.createIssue({
         title: `Opdatering: ${projectName} — ${speaker}, ${day}`, project_id: row.multica_project ?? undefined, status: "backlog",
         assignee_type: "agent", assignee_id: orchestrator.id, allow_duplicate: true,
-        attachment_ids: attachments.map((a) => a.id),
+        attachment_ids: [...attachments, ...(deckFile ? [deckFile] : [])].map((a) => a.id),
         description: `Projekt: ${projectName} · Taler: ${speaker} · Dato: ${day}\n\n${text.trim()}\n`
-          + (attachments.length ? `\nBilleder: ${attachments.length} vedhæftet. GDPR-gaten afgør, om de må komme i hubben.\n` : ""),
+          + (attachments.length ? `\nBilleder: ${attachments.length} vedhæftet. GDPR-gaten afgør, om de må komme i hubben.\n` : "")
+          + (deckFile ? `\nPræsentation: ${deckFile.filename} vedhæftet. GDPR-gaten afgør slide for slide, hvad der må komme i hubben.\n` : ""),
       });
       // The same markers an Opus note carries, set before the run starts.
       await api.setIssueMetadataKey(issue.id, "intake_source", "opus_mcp");
@@ -1169,11 +1208,12 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
       await api.setIssueMetadataKey(issue.id, "intake_request_id", crypto.randomUUID());
       await api.setIssueMetadataKey(issue.id, "note_source", "project_page");
       if (attachments.length) await api.setIssueMetadataKey(issue.id, "note_images", attachments.length);
+      if (deckFile) await api.setIssueMetadataKey(issue.id, "note_deck", deckFile.filename);
       await api.updateIssue(issue.id, { status: "todo" });
       return issue;
     },
     onSuccess: (issue) => {
-      setSent(issue); setOpen(false); setText(""); setImages([]); setWho(""); setOther(""); setDay(today());
+      setSent(issue); setOpen(false); setText(""); setImages([]); setDeck(null); setWho(""); setOther(""); setDay(today());
       if (row.multica_project) qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", row.multica_project] });
     },
   });
@@ -1194,7 +1234,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
     );
   }
   return (
-    <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (speaker && text.trim()) send.mutate(); }}>
+    <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (speaker && (text.trim() || deck)) send.mutate(); }}>
       <div className="text-sm font-medium">Tilføj opdatering til {projectName}</div>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
@@ -1218,7 +1258,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
         )}
         <label className="flex flex-col gap-1 text-sm sm:col-span-2">
           <span className="text-muted-foreground">Opdateringen</span>
-          <textarea id="upd-text" required rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
+          <textarea id="upd-text" required={!deck} rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
             onPaste={pasteImages(setImages)}
             placeholder="Indsæt mailen eller skriv, hvad du fik at vide. Den screenes af GDPR-gaten, før noget kommer i hubben." />
         </label>
@@ -1226,10 +1266,13 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
           <ImagePicker id="upd-images" images={images} setImages={setImages}
             note="GDPR-gaten ser også billederne. Viser et billede personer eller persondata, kommer det ikke i hubben." />
         </div>
+        <div className="sm:col-span-2">
+          <DeckPicker id="upd-deck" deck={deck} setDeck={setDeck} />
+        </div>
       </div>
       {send.error && <p className="text-sm text-[#CF022D]">Kunne ikke sende: {(send.error as Error).message}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={!speaker || !text.trim() || !day || send.isPending}
+        <button type="submit" disabled={!speaker || (!text.trim() && !deck) || !day || send.isPending}
           className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
           {send.isPending ? "Sender …" : "Send til hubben"}
         </button>

@@ -31,6 +31,8 @@ var extContentTypes = map[string]string{
 	".mjs":  "application/javascript",
 	".json": "application/json",
 	".wasm": "application/wasm",
+	// Office files are zip archives; the sniffer only sees application/zip.
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 
 const maxUploadSize = 100 << 20 // 100 MB

@@ -48,6 +48,12 @@ const nextConfig: NextConfig = {
     formats: ["image/avif", "image/webp"],
     qualities: [75, 80, 85],
   },
+  experimental: {
+    // proxy.ts buffers request bodies and forwards only the first 10MB by
+    // default, which truncates /api/upload-file and hangs the backend. Match
+    // the server's maxUploadSize (server/internal/handler/file.go).
+    proxyClientMaxBodySize: "100mb",
+  },
   async rewrites() {
     return {
       // Run before file-system routes so /docs isn't shadowed by the

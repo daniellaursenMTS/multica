@@ -1135,7 +1135,7 @@ function ImagePicker({ id, images, setImages, note }: { id: string; images: File
   );
 }
 
-const MAX_DECK_BYTES = 25 * 1024 * 1024;
+const MAX_DECK_BYTES = 35 * 1024 * 1024;
 
 /** Deck field for «Tilføj opdatering»: one .pptx or .pdf. The GDPR gate extracts it locally and
  *  screens it slide by slide; the file itself stays on the issue and never goes to the hub. */
@@ -1144,12 +1144,12 @@ function DeckPicker({ id, deck, setDeck }: { id: string; deck: File | null; setD
   const pick = (f: File | undefined) => {
     if (!f) return;
     if (!/\.(pptx|pdf)$/i.test(f.name)) { setError("Kun PowerPoint (.pptx) eller PDF."); return; }
-    if (f.size > MAX_DECK_BYTES) { setError(`${f.name} er over 25 MB.`); return; }
+    if (f.size > MAX_DECK_BYTES) { setError(`${f.name} er over 35 MB.`); return; }
     setError(""); setDeck(f);
   };
   return (
     <div className="flex flex-col gap-2 text-sm">
-      <span className="text-muted-foreground">Præsentation <span className="text-xs">(valgfrit · én .pptx eller .pdf, højst 60 slides og 25 MB · speaker notes kommer ikke med)</span></span>
+      <span className="text-muted-foreground">Præsentation <span className="text-xs">(valgfrit · én .pptx eller .pdf, højst 60 slides og 35 MB · speaker notes kommer ikke med)</span></span>
       {deck ? (
         <span className="flex items-center gap-2">
           <span className="rounded-md border px-2 py-1">{deck.name} <span className="text-xs text-muted-foreground">· {Math.max(1, Math.round(deck.size / 1024 / 1024))} MB</span></span>

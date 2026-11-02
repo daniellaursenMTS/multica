@@ -104,7 +104,7 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 		if !supportedIncomingMCPVersion(version) {
 			version = incomingMCPVersion
 		}
-		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.1.0"}, "instructions": "Matas' Multica workspace: projects and their diamonds of leaders, what project owners share, updates to a project (screened by the GDPR gate), and tasks for agents. Questions and tasks are answered asynchronously: poll multica_get_issue. Submitting is not approval; a person decides when work is done."})
+		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.1.0"}, "instructions": "Matas' Multica workspace: projects and their diamonds of leaders, what project owners share, updates to a project (screened by the GDPR gate), tasks for agents, and apps' token usage for the Capex page. Questions and tasks are answered asynchronously: poll multica_get_issue. Submitting is not approval; a person decides when work is done."})
 	case "ping":
 		mcpRPCResult(w, msg.ID, map[string]any{})
 	case "tools/list":
@@ -137,6 +137,8 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 			result, err = h.mcpAddProjectUpdate(r, p.Arguments)
 		case "multica_create_task":
 			result, err = h.mcpCreateTask(r, p.Arguments)
+		case "multica_report_usage":
+			result, err = h.mcpReportUsage(r, p.Arguments)
 		default:
 			mcpRPCError(w, msg.ID, -32602, "unknown tool")
 			return

@@ -18,8 +18,9 @@ import (
 )
 
 // Matas tools on the incoming MCP endpoint: projects and their diamonds, shared project
-// knowledge, updates to a project hub, and tasks for agents. Everything runs as the member whose
-// token calls it, with the same workspace checks as the REST API.
+// knowledge, updates to a project hub, tasks for agents, and apps' usage for the Capex page.
+// Everything runs as the member whose token calls it, with the same workspace checks as the
+// REST API.
 //
 // What a project shares follows its owners' choice (kh_share on the intake issue): an approved
 // summary is returned as it stands; a whole shared hub is answered by the Knowledge Hub agent,
@@ -46,6 +47,7 @@ func matasMCPTools() []any {
 		map[string]any{"name": "multica_ask_project", "description": "Ask the Knowledge Hub agent a question. It answers from Matas' own sources and from projects only as far as their owners share them. Asynchronous: poll multica_get_issue with the returned id; the answer appears there as `answer` within a few minutes.", "inputSchema": obj([]string{"request_id", "question"}, map[string]any{"request_id": str("Stable UUID for this question; reuse it to retry."), "question": str("The question, 1–4000 characters."), "project_id": str("Optional project UUID the question is about.")}), "annotations": rw},
 		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID; the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today.")}), "annotations": rw},
 		map[string]any{"name": "multica_create_task", "description": "Create a task in a project and give it to an agent (see multica_list_agents). Poll multica_get_issue for status; the agent's latest reply appears as `answer`.", "inputSchema": obj([]string{"request_id", "project_id", "title", "agent"}, map[string]any{"request_id": str("Stable UUID for this task; reuse it to retry."), "project_id": str("Project UUID."), "title": str("Task title, 1–200 characters."), "description": str("What to do, the background and what done looks like."), "agent": str("Agent name or UUID."), "start": map[string]any{"type": "boolean", "description": "Start the agent now (default true). False parks the task in backlog."}}), "annotations": rw},
+		matasUsageTool(),
 	}
 }
 
@@ -251,16 +253,7 @@ func (h *Handler) matasCreate(r *http.Request, requestID string, title, text str
 		AssigneeType: pgtype.Text{String: "agent", Valid: true}, AssigneeID: agent.ID, CreatorType: "member", CreatorID: creator,
 		ProjectID: project, AllowDuplicate: true,
 		Submission: &service.IssueSubmission{RequestID: rid, PayloadHash: hex.EncodeToString(digest[:]), Metadata: metadata},
-	}, service.IssueCreateOpts{Platform: "mcp", AssignedAgentRunFireAt: fireAt,
-		BroadcastPayload: func(issue db.Issue, atts []db.Attachment, labels []db.IssueLabel) map[string]any {
-			payload := issueToResponse(issue, h.getIssuePrefix(r.Context(), issue.WorkspaceID))
-			h.fillStatusCategory(r.Context(), issue.WorkspaceID, &payload)
-			payload.Attachments = []AttachmentResponse{}
-			labelResponses := labelsToResponse(labels)
-			payload.Labels = &labelResponses
-			return map[string]any{"issue": payload}
-		},
-	})
+	}, service.IssueCreateOpts{Platform: "mcp", AssignedAgentRunFireAt: fireAt, BroadcastPayload: h.mcpIssueBroadcast(r)})
 	if errors.Is(err, service.ErrSubmissionConflict) {
 		return nil, err
 	}

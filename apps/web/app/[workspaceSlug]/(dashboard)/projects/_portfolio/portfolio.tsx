@@ -13,6 +13,11 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  addProjectDocuments,
+  DOCUMENT_ACCEPT,
+  uploadProjectFiles,
+} from "./portfolio-attachments";
 
 // Projects (Matas): every Multica project plus the ClickUp intake in one list, grouped by status
 // like ClickUp. A project page has Oversigt, Kanban (Multica's own view) and Diamant.
@@ -556,13 +561,15 @@ export function NewTask({ projectId, projectName, agents }: { projectId: string;
   const [agentId, setAgentId] = useState("");
   const [startNow, setStartNow] = useState(true);
   const [images, setImages] = useState<File[]>([]);
+  const [documents, setDocuments] = useState<File[]>([]);
   const [created, setCreated] = useState<Issue | null>(null);
   const choosable = agents.filter((a) => !a.archived_at).sort((a, b) => a.name.localeCompare(b.name, "da"));
   const agent = choosable.find((a) => a.id === agentId);
   const create = useMutation({
     mutationFn: async () => {
       // Images go up first, then sit on the issue and inline in its description for the agent to see.
-      const attachments = await Promise.all(images.map((f) => api.uploadFile(f)));
+      const attachments = await uploadProjectFiles(images, (file) => api.uploadFile(file));
+      const documentAttachments = await uploadProjectFiles(documents, (file) => api.uploadFile(file));
       const body = [description.trim(), ...attachments.map((a) => `![${a.filename}](${a.url})`)].filter(Boolean).join("\n\n");
       return api.createIssue({
         title: title.trim(),
@@ -570,7 +577,9 @@ export function NewTask({ projectId, projectName, agents }: { projectId: string;
         project_id: projectId,
         status: agentId && startNow ? "todo" : "backlog",
         ...(agentId ? { assignee_type: "agent" as const, assignee_id: agentId } : {}),
-        ...(attachments.length ? { attachment_ids: attachments.map((a) => a.id) } : {}),
+        ...([...attachments, ...documentAttachments].length
+          ? { attachment_ids: [...attachments, ...documentAttachments].map((a) => a.id) }
+          : {}),
       });
     },
     onSuccess: (issue) => {
@@ -578,6 +587,7 @@ export function NewTask({ projectId, projectName, agents }: { projectId: string;
       setTitle("");
       setDescription("");
       setImages([]);
+      setDocuments([]);
       qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", projectId] });
       if (workspace?.id) qc.invalidateQueries({ queryKey: issueKeys.all(workspace.id) });
     },
@@ -617,6 +627,7 @@ export function NewTask({ projectId, projectName, agents }: { projectId: string;
           className="rounded-md border bg-background px-2 py-1.5" placeholder="Baggrund, hvad er færdigt, hvad skal undgås …" />
       </label>
       <ImagePicker id="portfolio-task-images" images={images} setImages={setImages} />
+      <DocumentPicker id="portfolio-task-documents" documents={documents} setDocuments={setDocuments} />
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted-foreground">Agent</span>
         <select id="portfolio-task-agent" value={agentId} onChange={(e) => setAgentId(e.target.value)} className="rounded-md border bg-background px-2 py-1.5">
@@ -1135,6 +1146,45 @@ function ImagePicker({ id, images, setImages, note }: { id: string; images: File
   );
 }
 
+/** Ordinary file attachments stay in Multica and are not interpreted as presentations. */
+function DocumentPicker({ id, documents, setDocuments }: {
+  id: string;
+  documents: File[];
+  setDocuments: React.Dispatch<React.SetStateAction<File[]>>;
+}) {
+  const [error, setError] = useState("");
+  const pick = (files: Iterable<File>) => {
+    const result = addProjectDocuments(documents, files);
+    setDocuments(result.documents);
+    setError(result.error);
+  };
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <span className="text-muted-foreground">
+        Dokumenter <span className="text-xs">(valgfrit · Excel, Word eller PDF · op til 100 MB pr. fil)</span>
+      </span>
+      {documents.length > 0 && (
+        <div className="flex flex-col items-start gap-1.5">
+          {documents.map((file, index) => (
+            <span key={`${file.name}-${file.size}-${index}`} className="flex max-w-full items-center gap-2 rounded-md border px-2 py-1">
+              <span className="truncate">{file.name}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{Math.max(1, Math.ceil(file.size / 1024 / 1024))} MB</span>
+              <button type="button" onClick={() => setDocuments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                aria-label={`Fjern ${file.name}`} className="grid size-5 shrink-0 place-items-center rounded-full border bg-background text-xs hover:bg-accent">×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <label className="w-fit cursor-pointer rounded-md border border-dashed px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent">
+        + Dokument
+        <input id={id} type="file" multiple className="sr-only" accept={DOCUMENT_ACCEPT}
+          onChange={(event) => { pick(event.target.files ?? []); event.target.value = ""; }} />
+      </label>
+      {error && <span role="alert" className="text-xs text-[#CF022D]">{error}</span>}
+    </div>
+  );
+}
+
 const MAX_DECK_BYTES = 35 * 1024 * 1024;
 
 /** Deck field for «Tilføj opdatering»: one .pptx or .pdf. The GDPR gate extracts it locally and
@@ -1183,6 +1233,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
   const [day, setDay] = useState(today);
   const [text, setText] = useState("");
   const [images, setImages] = useState<File[]>([]);
+  const [documents, setDocuments] = useState<File[]>([]);
   const [deck, setDeck] = useState<File | null>(null);
   const [sent, setSent] = useState<Issue | null>(null);
   const speaker = (who === "__other" ? other : who).trim();
@@ -1191,15 +1242,18 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
     mutationFn: async () => {
       if (!orchestrator) throw new Error(`Agenten «${ORCHESTRATOR_NAME}» findes ikke.`);
       // Images go up first and ride along on the issue; the GDPR gate decides whether each may reach the hub.
-      const attachments = await Promise.all(images.map((f) => api.uploadFile(f)));
+      const attachments = await uploadProjectFiles(images, (file) => api.uploadFile(file));
+      // Generic documents remain ordinary Multica attachments. Only `deck` gets note_deck metadata.
+      const documentAttachments = await uploadProjectFiles(documents, (file) => api.uploadFile(file));
       // So does the deck; the gate extracts it on the Mac and releases slide by slide.
-      const deckFile = deck ? await api.uploadFile(deck) : null;
+      const deckFile = deck ? (await uploadProjectFiles([deck], (file) => api.uploadFile(file)))[0] : null;
       const issue = await api.createIssue({
         title: `Opdatering: ${projectName} — ${speaker}, ${day}`, project_id: row.multica_project ?? undefined, status: "backlog",
         assignee_type: "agent", assignee_id: orchestrator.id, allow_duplicate: true,
-        attachment_ids: [...attachments, ...(deckFile ? [deckFile] : [])].map((a) => a.id),
+        attachment_ids: [...attachments, ...documentAttachments, ...(deckFile ? [deckFile] : [])].map((a) => a.id),
         description: `Projekt: ${projectName} · Taler: ${speaker} · Dato: ${day}\n\n${text.trim()}\n`
           + (attachments.length ? `\nBilleder: ${attachments.length} vedhæftet. GDPR-gaten afgør, om de må komme i hubben.\n` : "")
+          + (documentAttachments.length ? `\nDokumentbilag: ${documentAttachments.map((file) => file.filename).join(", ")}. Bilagene må ikke læses eller publiceres i hubben.\n` : "")
           + (deckFile ? `\nPræsentation: ${deckFile.filename} vedhæftet. GDPR-gaten afgør slide for slide, hvad der må komme i hubben.\n` : ""),
       });
       // The same markers an Opus note carries, set before the run starts.
@@ -1213,7 +1267,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
       return issue;
     },
     onSuccess: (issue) => {
-      setSent(issue); setOpen(false); setText(""); setImages([]); setDeck(null); setWho(""); setOther(""); setDay(today());
+      setSent(issue); setOpen(false); setText(""); setImages([]); setDocuments([]); setDeck(null); setWho(""); setOther(""); setDay(today());
       if (row.multica_project) qc.invalidateQueries({ queryKey: ["portfolio", "project-issues", row.multica_project] });
     },
   });
@@ -1234,7 +1288,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
     );
   }
   return (
-    <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (speaker && (text.trim() || deck)) send.mutate(); }}>
+    <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (speaker && (text.trim() || deck || documents.length)) send.mutate(); }}>
       <div className="text-sm font-medium">Tilføj opdatering til {projectName}</div>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
@@ -1258,7 +1312,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
         )}
         <label className="flex flex-col gap-1 text-sm sm:col-span-2">
           <span className="text-muted-foreground">Opdateringen</span>
-          <textarea id="upd-text" required={!deck} rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
+          <textarea id="upd-text" required={!deck && documents.length === 0} rows={8} value={text} onChange={(e) => setText(e.target.value)} className={input}
             onPaste={pasteImages(setImages)}
             placeholder="Indsæt mailen eller skriv, hvad du fik at vide. Den screenes af GDPR-gaten, før noget kommer i hubben." />
         </label>
@@ -1267,12 +1321,16 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
             note="GDPR-gaten ser også billederne. Viser et billede personer eller persondata, kommer det ikke i hubben." />
         </div>
         <div className="sm:col-span-2">
+          <DocumentPicker id="upd-documents" documents={documents} setDocuments={setDocuments} />
+          {documents.length > 0 && <span className="text-xs text-muted-foreground">Dokumenterne gemmes kun som bilag i Multica og sendes ikke til præsentationsudtræk eller hubben.</span>}
+        </div>
+        <div className="sm:col-span-2">
           <DeckPicker id="upd-deck" deck={deck} setDeck={setDeck} />
         </div>
       </div>
       {send.error && <p className="text-sm text-[#CF022D]">Kunne ikke sende: {(send.error as Error).message}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={!speaker || (!text.trim() && !deck) || !day || send.isPending}
+        <button type="submit" disabled={!speaker || (!text.trim() && !deck && documents.length === 0) || !day || send.isPending}
           className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
           {send.isPending ? "Sender …" : "Send til hubben"}
         </button>

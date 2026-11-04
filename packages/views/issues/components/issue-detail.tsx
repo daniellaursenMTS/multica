@@ -79,7 +79,7 @@ import { SubIssuesAgentWorkingChip } from "./sub-issues-agent-working-chip";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
 import { useNewRunIds } from "./use-run-comment-motion";
-import { AgentRunComment, CommentCard } from "./comment-card";
+import { AgentRunComment, AttachmentList, CommentCard } from "./comment-card";
 import { EMPTY_COMMENT_RUNS, buildCommentRunView, type CommentRun } from "./comment-runs";
 import { issueTasksOptions } from "@multica/core/issues/queries";
 import { SourceContextBadge } from "./source-context-viewer";
@@ -3066,6 +3066,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               flushPendingOnUnmount
               currentIssueId={id}
               attachments={descEditorAttachments}
+            />
+
+            <AttachmentList
+              attachments={issueAttachments}
+              content={issue.description ?? ""}
+              className="mt-3"
             />
 
             <div className="flex items-center gap-1 mt-3">

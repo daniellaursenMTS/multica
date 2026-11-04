@@ -165,6 +165,10 @@ vi.mock("../../editor", async () => ({
   // image-sequence-context.test.tsx against the real provider.
   ImageSequenceProvider: ({ children }: { children: React.ReactNode }) =>
     children,
+  AttachmentDownloadProvider: ({ children }: { children: React.ReactNode }) => children,
+  Attachment: ({ attachment }: any) => (
+    <button type="button">{attachment.attachment.filename}</button>
+  ),
   isPreviewable: () => false,
   ReadonlyContent: ({ content }: { content: string }) => (
     <div data-testid="readonly-content">{content}</div>
@@ -930,6 +934,32 @@ describe("IssueDetail (shared)", () => {
 
     const description = await screen.findByDisplayValue("Add JWT auth to the backend");
     expect(description).toHaveAttribute("data-flush-on-unmount", "true");
+  });
+
+  it("shows a standalone issue document after attachments reload", async () => {
+    mockApiObj.listAttachments.mockResolvedValueOnce([
+      {
+        id: "attachment-1",
+        workspace_id: "ws-1",
+        issue_id: "issue-1",
+        comment_id: null,
+        chat_session_id: null,
+        chat_message_id: null,
+        uploader_type: "member",
+        uploader_id: "user-1",
+        filename: "budget.xlsx",
+        url: "https://storage.example/budget.xlsx",
+        download_url: "/api/attachments/attachment-1/download",
+        markdown_url: "/api/attachments/attachment-1/download",
+        content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        size_bytes: 42,
+        created_at: "2026-11-04T00:00:00Z",
+      },
+    ]);
+
+    renderIssueDetail();
+
+    expect(await screen.findByRole("button", { name: "budget.xlsx" })).toBeInTheDocument();
   });
 
   it("remounts the eager description on issue switch without carrying stale content", async () => {

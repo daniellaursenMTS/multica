@@ -37,6 +37,8 @@ export interface Row {
   start_date: string | null;
   due_date: string | null;
   updated: string | null;
+  /** Latest work in the project: a comment, agent run or edit on one of its issues. */
+  activity?: string | null;
   description: string;
   subtasks: number;
   fields: Record<string, unknown>;
@@ -107,6 +109,23 @@ export function Diagram({ url, label }: { url: string; label: string }) {
 export const show = (v: unknown) =>
   v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0) ? "—" : Array.isArray(v) ? v.join(", ") : String(v);
 export const date = (d: string | null) => (d ? new Date(d).toLocaleDateString("da-DK", { day: "numeric", month: "short", year: "numeric" }) : "—");
+
+// Issues the page and the Mac's syncs write on their own: intake fields, Capex usage and the
+// Capex register. Their metadata writes bump last_activity_at without anyone working on the project.
+const BOOKKEEPING_KEYS = ["pf_intake", "capex_usage", "capex_register"];
+/** Latest activity per project; issues without last_activity_at count by updated_at. */
+export function projectActivity(issues: Issue[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const i of issues) {
+    if (!i.project_id || BOOKKEEPING_KEYS.some((k) => i.metadata?.[k])) continue;
+    const at = i.last_activity_at ?? i.updated_at;
+    const prev = out.get(i.project_id);
+    if (at && (!prev || at > prev)) out.set(i.project_id, at);
+  }
+  return out;
+}
+export type ProjectSort = "status" | "activity";
+const byActivity = (a: Row, b: Row) => (b.activity ?? "").localeCompare(a.activity ?? "");
 
 // ---- Project fields kept in Multica (step 3) -------------------------------------------------
 // A project's intake fields live as metadata on one "intake issue" in the project (pf_intake).
@@ -380,9 +399,11 @@ function useProjectUsage(rows: Row[], manual: CapexManual[]) {
 }
 
 /** The project list: one table, so every status group shares the same columns. */
-export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => void }) {
-  const groups = STATUS_ORDER.map((s) => ({ s, items: rows.filter((r) => r.status === s) })).concat(
-    [{ s: "andet", items: rows.filter((r) => !STATUS_ORDER.includes(r.status)) }],
+export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (id: string) => void; sort?: ProjectSort }) {
+  // Status groups stay; «Seneste aktivitet» only orders the projects inside each group.
+  const ordered = sort === "activity" ? rows.toSorted(byActivity) : rows;
+  const groups = STATUS_ORDER.map((s) => ({ s, items: ordered.filter((r) => r.status === s) })).concat(
+    [{ s: "andet", items: ordered.filter((r) => !STATUS_ORDER.includes(r.status)) }],
   ).filter((g) => g.items.length);
   const [closed, setClosed] = useState<Record<string, boolean>>({ closed: true });
   const capex = useCapex();
@@ -396,13 +417,14 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
       {capex.error && <p role="alert" className="p-3 text-sm text-destructive">Forbrugsposter kunne ikke hentes: {capex.error.message}</p>}
       <table className="w-full min-w-[980px] table-fixed text-sm">
         <colgroup>
-          <col className="w-[27%]" /><col className="w-[9%]" /><col className="w-[12%]" />{hasUsage && <col className="w-[14%]" />}
-          <col className="w-[11%]" /><col className="w-[10%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
+          <col className="w-[22%]" /><col className="w-[9%]" /><col className="w-[11%]" />{hasUsage && <col className="w-[14%]" />}
+          <col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-background text-xs text-muted-foreground">
           <tr className="divide-x border-b">
             <th className="px-3 py-2 text-left font-medium">Projekt</th><th className={th}>Ansvarlig</th><th className={th}>Capex</th>
             {hasUsage && <th className={th} title="Agenternes tokens (input og output) plus manuelle Capex-poster på projektet, fx Claude Code, og anslået pris til listepris">Forbrug · {USAGE_DAYS} dage</th>}
+            <th className={th} title="Seneste kommentar, agentkørsel eller ændring på et af projektets issues">Aktivitet</th>
             <th className={th}>Deadline</th><th className={th}>Prioritet</th>
             <th className={th} title="WOF Score">💡 WOF</th>
             <th className={th} title="CV Score (Commercial value)">CV</th>
@@ -412,7 +434,7 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
         {groups.map(({ s, items }) => (
           <tbody key={s}>
             <tr className="border-b bg-muted/40">
-              <td colSpan={hasUsage ? 9 : 8} className="px-3 py-1.5">
+              <td colSpan={hasUsage ? 10 : 9} className="px-3 py-1.5">
                 <button type="button" onClick={() => setClosed((c) => ({ ...c, [s]: !c[s] }))} aria-expanded={!closed[s]}
                   className="flex items-center gap-2.5 text-sm">
                   <span className="w-3 text-muted-foreground">{closed[s] ? "▸" : "▾"}</span>
@@ -466,6 +488,9 @@ export function Overview({ rows, open }: { rows: Row[]; open: (id: string) => vo
                       ) : <span className="text-muted-foreground">{r.multica_project && !u ? "…" : "—"}</span>}
                     </td>
                   )}
+                  <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-muted-foreground" title={r.activity ? new Date(r.activity).toLocaleString("da-DK") : undefined}>
+                    {r.activity ? ago(r.activity) : "—"}
+                  </td>
                   <td className="px-3 py-2.5 tabular-nums">{date(r.due_date)}</td>
                   <td className="px-3 py-2.5">
                     {r.priority && r.priority !== "none" ? (
@@ -1498,6 +1523,21 @@ export function usePortfolio() {
       return dia || kh || drafting;
     }) ? 5000 : false),
   });
+  // Newest activity first, so a few pages cover every project that has been worked on lately.
+  // Projects outside them fall back to their own updated_at.
+  const { data: activity } = useQuery({
+    queryKey: ["portfolio", "activity", workspace?.id],
+    enabled: !!workspace?.id,
+    queryFn: async () => {
+      const all: Issue[] = [];
+      for (let offset = 0; offset < 300; offset += 100) {
+        const res = await api.listIssues({ sort_by: "last_activity", sort_direction: "desc", limit: 100, offset });
+        all.push(...res.issues);
+        if (res.issues.length < 100) break;
+      }
+      return projectActivity(all);
+    },
+  });
   // The generated views change when a sync lands; this key makes the page fetch them again.
   const viewsKey = String((live?.intakes ?? []).map((i) => String(i.metadata.dia_synced_spec ?? "")).join("|")
     .split("").reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 7) >>> 0);
@@ -1543,7 +1583,7 @@ export function usePortfolio() {
         assignees: hub?.assignees?.length ? hub.assignees : person(pr.lead_type === "member" ? pr.lead_id : null),
         priority: pr.priority === "none" ? null : pr.priority,
         start_date: pr.start_date?.slice(0, 10) ?? null, due_date: pr.due_date?.slice(0, 10) ?? null,
-        updated: pr.updated_at, description: pr.description || hub?.description || "", subtasks: 0,
+        updated: pr.updated_at, activity: [activity?.get(pr.id), pr.updated_at].filter(Boolean).sort().at(-1) ?? null, description: pr.description || hub?.description || "", subtasks: 0,
         fields: { ...(hub?.fields ?? {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== null)),
           ...(capexLabel(extra.capex_id as string | null) ? { capex: capexLabel(extra.capex_id as string | null) } : {}) },
         multica_project: pr.id, intake_issue: intake?.id ?? null, intake_meta: intake?.metadata,
@@ -1554,8 +1594,8 @@ export function usePortfolio() {
       });
     }
     const clickup = generated.filter((r) => r.source === "clickup" && !moved.has(r.id) && r.status !== "closed");
-    return [...out, ...clickup];
-  }, [pf, live, members, capex.data]);
+    return [...out, ...clickup.map((r) => ({ ...r, activity: r.updated }))];
+  }, [pf, live, members, capex.data, activity]);
 
   const me = index && email ? index.accounts[email.toLowerCase()] ?? null : null;
   const myHubs = new Set(index?.people.find((x) => x.name === me)?.roles.map((r) => r.project) ?? []);

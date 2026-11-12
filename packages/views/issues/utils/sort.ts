@@ -60,6 +60,13 @@ export function sortIssues(
         return (
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
+      case "last_activity":
+        // Rows written before last_activity_at existed fall back to
+        // updated_at, the same seed the server backfill uses.
+        return (
+          new Date(a.last_activity_at ?? a.updated_at).getTime() -
+          new Date(b.last_activity_at ?? b.updated_at).getTime()
+        );
       case "title":
         return a.title.localeCompare(b.title);
       case "position":

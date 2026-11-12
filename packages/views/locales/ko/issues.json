@@ -191,6 +191,7 @@
     "sort_due_date": "마감일",
     "sort_created": "생성일",
     "sort_updated": "수정일",
+    "sort_last_activity": "최근 활동",
     "sort_title": "제목",
     "card_priority": "우선순위",
     "card_description": "설명",

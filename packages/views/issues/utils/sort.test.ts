@@ -49,3 +49,27 @@ describe("sortIssues property sorts", () => {
     expect(sorted.map((i) => i.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("sortIssues last_activity", () => {
+  function issueActive(id: string, lastActivityAt: string | null, updatedAt: string): Issue {
+    return {
+      id,
+      position: 0,
+      last_activity_at: lastActivityAt,
+      updated_at: updatedAt,
+    } as unknown as Issue;
+  }
+
+  it("puts the most recently worked-on issue first on desc", () => {
+    const sorted = sortIssues(
+      [
+        issueActive("old", "2026-11-01T10:00:00Z", "2026-11-01T10:00:00Z"),
+        issueActive("fresh", "2026-11-12T09:00:00Z", "2026-11-02T10:00:00Z"),
+        issueActive("legacy", null, "2026-11-05T10:00:00Z"),
+      ],
+      "last_activity",
+      "desc",
+    );
+    expect(sorted.map((i) => i.id)).toEqual(["fresh", "legacy", "old"]);
+  });
+});

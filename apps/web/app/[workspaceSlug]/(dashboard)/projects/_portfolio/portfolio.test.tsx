@@ -24,7 +24,7 @@ vi.mock("@multica/views/navigation", () => ({
 }));
 vi.mock("@multica/views/runtimes", () => ({ estimateCost: () => 0 }));
 
-import { AddUpdate, NewTask, projectActivity, type Row } from "./portfolio";
+import { AddUpdate, NewTask, ago, projectActivity, type Row } from "./portfolio";
 
 const createdIssue = {
   id: "issue-1",
@@ -164,5 +164,16 @@ describe("projectActivity", () => {
       p1: "2026-11-11T09:00:00Z",
       p3: "2026-01-01T00:00:00Z",
     });
+  });
+});
+
+describe("ago", () => {
+  const now = new Date(2026, 10, 12, 14, 0);
+  const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).toISOString();
+
+  it("counts calendar days and shows the time for today and yesterday", () => {
+    expect(ago(at(12, 1, 5), now)).toBe("i dag 01.05");
+    expect(ago(at(11, 23, 30), now)).toBe("i går 23.30");
+    expect(ago(at(10, 15), now)).toBe("2 dage siden");
   });
 });

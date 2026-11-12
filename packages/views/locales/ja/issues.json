@@ -191,6 +191,7 @@
     "sort_due_date": "期限",
     "sort_created": "作成日",
     "sort_updated": "更新日",
+    "sort_last_activity": "最終アクティビティ",
     "sort_title": "タイトル",
     "card_priority": "優先度",
     "card_description": "説明",

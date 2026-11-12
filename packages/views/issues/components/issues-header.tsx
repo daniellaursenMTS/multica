@@ -1919,7 +1919,7 @@ export function IssueDisplayControls({
   );
   const hasActiveFilters = activeFilterCount > 0;
 
-  const SORT_LABEL_KEY: Record<typeof SORT_OPTIONS[number]["value"], "sort_manual" | "sort_status" | "sort_priority" | "sort_start_date" | "sort_due_date" | "sort_created" | "sort_updated" | "sort_title"> = {
+  const SORT_LABEL_KEY: Record<typeof SORT_OPTIONS[number]["value"], "sort_manual" | "sort_status" | "sort_priority" | "sort_start_date" | "sort_due_date" | "sort_created" | "sort_updated" | "sort_last_activity" | "sort_title"> = {
     position: "sort_manual",
     status: "sort_status",
     priority: "sort_priority",
@@ -1927,6 +1927,7 @@ export function IssueDisplayControls({
     due_date: "sort_due_date",
     created_at: "sort_created",
     updated_at: "sort_updated",
+    last_activity: "sort_last_activity",
     title: "sort_title",
   };
   const GROUPING_LABEL_KEY: Record<typeof GROUPING_OPTIONS[number]["value"], "group_status" | "group_assignee" | "group_project"> = {
@@ -2219,7 +2220,10 @@ export function IssueDisplayControls({
                     ]}
                     value={sortBy}
                     onValueChange={(v) => {
-                      if (v) act.setSortBy(v as SortField);
+                      if (!v) return;
+                      act.setSortBy(v as SortField);
+                      // "Last activity" is only useful newest-first.
+                      if (v === "last_activity") act.setSortDirection("desc");
                     }}
                   >
                     <SelectTrigger size="sm" className="w-26" aria-label={t(($) => $.display.ordering_section)}>

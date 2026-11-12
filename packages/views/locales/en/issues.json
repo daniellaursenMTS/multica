@@ -195,6 +195,7 @@
     "sort_due_date": "Due date",
     "sort_created": "Created date",
     "sort_updated": "Updated date",
+    "sort_last_activity": "Last activity",
     "sort_title": "Title",
     "card_priority": "Priority",
     "card_description": "Description",

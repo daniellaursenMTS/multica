@@ -35,6 +35,7 @@ export type SortField =
   | "due_date"
   | "created_at"
   | "updated_at"
+  | "last_activity"
   | "title"
   | `property:${string}`;
 export type SortDirection = "asc" | "desc";
@@ -158,6 +159,7 @@ export const SORT_OPTIONS: { value: StaticSortField; label: string }[] = [
   { value: "due_date", label: "Due date" },
   { value: "created_at", label: "Created date" },
   { value: "updated_at", label: "Updated date" },
+  { value: "last_activity", label: "Last activity" },
   { value: "title", label: "Title" },
 ];
 

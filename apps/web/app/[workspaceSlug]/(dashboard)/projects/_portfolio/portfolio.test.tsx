@@ -24,7 +24,7 @@ vi.mock("@multica/views/navigation", () => ({
 }));
 vi.mock("@multica/views/runtimes", () => ({ estimateCost: () => 0 }));
 
-import { AddUpdate, NewTask, type Row } from "./portfolio";
+import { AddUpdate, NewTask, projectActivity, type Row } from "./portfolio";
 
 const createdIssue = {
   id: "issue-1",
@@ -144,5 +144,25 @@ describe("portfolio document attachments", () => {
 
     expect(await screen.findByText(/Kunne ikke uploade brief\.pdf: lageret svarer ikke/)).toBeInTheDocument();
     expect(mockApi.createIssue).not.toHaveBeenCalled();
+  });
+});
+
+describe("projectActivity", () => {
+  const issue = (project_id: string | null, last_activity_at: string | null, metadata = {}) =>
+    ({ project_id, last_activity_at, updated_at: "2026-01-01T00:00:00Z", metadata }) as unknown as Issue;
+
+  it("keeps the newest activity per project and skips bookkeeping issues", () => {
+    const activity = projectActivity([
+      issue("p1", "2026-11-12T09:00:00Z", { pf_intake: true }),
+      issue("p1", "2026-11-10T09:00:00Z"),
+      issue("p1", "2026-11-11T09:00:00Z"),
+      issue("p2", "2026-11-12T08:00:00Z", { capex_usage: true }),
+      issue("p3", null),
+      issue(null, "2026-11-12T10:00:00Z"),
+    ]);
+    expect(Object.fromEntries(activity)).toEqual({
+      p1: "2026-11-11T09:00:00Z",
+      p3: "2026-01-01T00:00:00Z",
+    });
   });
 });

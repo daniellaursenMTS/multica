@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ProjectsPage } from "@multica/views/projects/components";
-import { Diagram, Overview, ProjectForm, usePortfolio } from "./_portfolio/portfolio";
+import { Diagram, Overview, ProjectForm, usePortfolio, type ProjectSort } from "./_portfolio/portfolio";
 
 // One list of projects: Multica projects grouped by status, with Portfolio fields and ◇ for a
 // diamond, then ClickUp intake that has not been moved yet. Multica's own list stays one click away.
@@ -16,8 +16,16 @@ function ProjectList() {
   const [creating, setCreating] = useState(false);
   const [showClickup, setShowClickup] = useState(false);
   const mine = params.get("filter") === "mine";
+  const sort: ProjectSort = params.get("sort") === "activity" ? "activity" : "status";
   const open = (id: string) => router.push(p.projectDetail(id));
-  const setFilter = (v: string | null) => router.push(v ? `?filter=${v}` : "?");
+  // Filter and sort are both in the URL, so a link or reload keeps the view.
+  const setParam = (key: string, v: string | null) => {
+    const next = new URLSearchParams(params.toString());
+    if (v) next.set(key, v);
+    else next.delete(key);
+    router.push(`?${next.toString()}`);
+  };
+  const setFilter = (v: string | null) => setParam("filter", v);
 
   if (params.get("view") === "classic") return <ProjectsPage />;
 
@@ -45,6 +53,14 @@ function ProjectList() {
                 </button>
               ))}
             </nav>
+            <nav className="flex gap-1 rounded-md border p-0.5 text-sm" aria-label="Sortering">
+              {([["status", "Standard"], ["activity", "Seneste aktivitet"]] as const).map(([k, label]) => (
+                <button key={k} type="button" aria-pressed={sort === k} onClick={() => setParam("sort", k === "status" ? null : k)}
+                  className={`rounded px-3 py-1 ${sort === k ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60"}`}>
+                  {label}
+                </button>
+              ))}
+            </nav>
             {!creating && (
               <button type="button" onClick={() => setCreating(true)} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">
                 + Nyt projekt
@@ -58,7 +74,7 @@ function ProjectList() {
         {mine && meSlug && <Diagram url={`/diamond-views/person-${meSlug}.svg`} label="dine projekter" />}
 
         {loading && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter projekter" />}
-        {!loading && (multica.length ? <Overview rows={multica} open={open} /> : (
+        {!loading && (multica.length ? <Overview rows={multica} open={open} sort={sort} /> : (
           <p className="text-sm text-muted-foreground">{mine ? "Du er ikke med i nogen projekter endnu." : "Ingen projekter endnu."}</p>
         ))}
 
@@ -76,7 +92,7 @@ function ProjectList() {
                 Intake-projekter, der endnu ikke er flyttet. Åbn et projekt og vælg «Flyt til Multica» for at redigere det og give agenter opgaver.
               </p>
             </div>
-            {showClickup && <div id="clickup-list"><Overview rows={clickup} open={open} /></div>}
+            {showClickup && <div id="clickup-list"><Overview rows={clickup} open={open} sort={sort} /></div>}
           </section>
         )}
 

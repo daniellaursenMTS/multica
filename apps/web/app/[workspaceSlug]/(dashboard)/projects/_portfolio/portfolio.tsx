@@ -515,10 +515,16 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
 const ISSUE_STATUS_COLOR: Record<string, string> = {
   backlog: "#87909e", todo: "#87909e", in_progress: "#1090e0", in_review: "#5f55ee", done: "#2f9e44", blocked: "#d33d44", cancelled: "#adb5bd",
 };
-const ago = (iso: string) => {
-  const d = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  return d <= 0 ? "i dag" : d === 1 ? "i går" : `${d} dage siden`;
+// Calendar days, not 24-hour blocks: 01:00 today is «i dag», not «i går». Today and yesterday
+// carry the time, so a list ordered by activity reads in order.
+export const ago = (iso: string, now = new Date()) => {
+  const t = new Date(iso);
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const d = Math.round((day(now) - day(t)) / 86_400_000);
+  const hm = t.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+  return d <= 0 ? `i dag ${hm}` : d === 1 ? `i går ${hm}` : `${d} dage siden`;
 };
+const lastActivity = (i: Issue) => i.last_activity_at ?? i.updated_at;
 
 /** Every issue in the project, live from Multica — newest activity first. Opus notes, agent tasks
  *  and anything created from the project all land here, so this is the project's history. */
@@ -527,6 +533,9 @@ export function History({ projectId, agentName }: { projectId: string; agentName
   const me = useAuthStore((s) => s.user?.id ?? null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["portfolio", "project-issues", projectId],
+    // Same as the project list's activity: nothing invalidates this on new comments or runs.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       const all: Issue[] = [];
       for (let offset = 0; offset < 500; offset += 100) {
@@ -534,7 +543,8 @@ export function History({ projectId, agentName }: { projectId: string; agentName
         all.push(...res.issues);
         if (res.issues.length < 100 || all.length >= res.total) break;
       }
-      return all.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+      // updated_at also moves on metadata writes from the syncs; last_activity_at is real work.
+      return all.sort((a, b) => (lastActivity(b) ?? "").localeCompare(lastActivity(a) ?? ""));
     },
   });
   const [all, setAll] = useState(false);
@@ -562,7 +572,7 @@ export function History({ projectId, agentName }: { projectId: string; agentName
                 {i.assignee_id && ` · ${i.assignee_type === "agent" ? agentName(i.assignee_id) : i.assignee_id === me ? "dig" : "medlem"}`}
               </span>
             </div>
-            <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{i.updated_at ? ago(i.updated_at) : ""}</span>
+            <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{lastActivity(i) ? ago(lastActivity(i)) : ""}</span>
           </li>
         ))}
       </ol>
@@ -1524,10 +1534,13 @@ export function usePortfolio() {
     }) ? 5000 : false),
   });
   // Newest activity first, so a few pages cover every project that has been worked on lately.
-  // Projects outside them fall back to their own updated_at.
+  // Projects outside them fall back to their own updated_at. No realtime event invalidates this
+  // key and the app default is staleTime: Infinity, so refetch on every visit and focus.
   const { data: activity } = useQuery({
     queryKey: ["portfolio", "activity", workspace?.id],
     enabled: !!workspace?.id,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       const all: Issue[] = [];
       for (let offset = 0; offset < 300; offset += 100) {

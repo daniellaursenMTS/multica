@@ -11,6 +11,7 @@
   },
   "filters": {
     "tooltip": "인박스 필터",
+    "quick_filters": "빠른 상태 필터",
     "active_count_other": "필터 {{count}}개 적용됨",
     "status": "상태",
     "priority": "우선순위",

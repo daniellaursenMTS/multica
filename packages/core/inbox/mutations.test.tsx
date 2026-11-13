@@ -8,8 +8,13 @@ import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxItem } from "../types";
-import { useMarkInboxUnread, useUnarchiveInbox } from "./mutations";
+import type { InboxItem, InboxTask, Issue } from "../types";
+import {
+  useMarkInboxTask,
+  useMarkInboxUnread,
+  useRemoveInboxTask,
+  useUnarchiveInbox,
+} from "./mutations";
 import { inboxKeys } from "./queries";
 
 vi.mock("../hooks", () => ({
@@ -208,5 +213,78 @@ describe("useUnarchiveInbox", () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(archivedCache(queryClient)).toEqual(original);
+  });
+});
+
+function task(issueId: string, overrides: Partial<InboxTask> = {}): InboxTask {
+  return {
+    issue: { id: issueId, workspace_id: WORKSPACE_ID, title: issueId } as Issue,
+    reasons: ["assigned"],
+    marked: false,
+    ...overrides,
+  };
+}
+
+function tasksCache(qc: QueryClient) {
+  return qc.getQueryData<InboxTask[]>(inboxKeys.tasks(WORKSPACE_ID)) ?? [];
+}
+
+describe("task list mutations", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+  });
+
+  it("drops a removed task right away", async () => {
+    const removeInboxTask = vi.fn(async () => undefined);
+    setApiInstance({ removeInboxTask } as unknown as ApiClient);
+    queryClient.setQueryData<InboxTask[]>(inboxKeys.tasks(WORKSPACE_ID), [
+      task("issue-1"),
+      task("issue-2"),
+    ]);
+
+    const { result } = renderHook(() => useRemoveInboxTask(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate("issue-1");
+
+    await waitFor(() => expect(removeInboxTask).toHaveBeenCalledWith("issue-1"));
+    expect(tasksCache(queryClient).map((t) => t.issue.id)).toEqual(["issue-2"]);
+  });
+
+  it("restores the list when removing fails", async () => {
+    const removeInboxTask = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    setApiInstance({ removeInboxTask } as unknown as ApiClient);
+    queryClient.setQueryData<InboxTask[]>(inboxKeys.tasks(WORKSPACE_ID), [task("issue-1")]);
+
+    const { result } = renderHook(() => useRemoveInboxTask(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate("issue-1");
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(tasksCache(queryClient).map((t) => t.issue.id)).toEqual(["issue-1"]);
+  });
+
+  it("adds the manual reason to a task already on the list", async () => {
+    const markInboxTask = vi.fn(async () => undefined);
+    setApiInstance({ markInboxTask } as unknown as ApiClient);
+    queryClient.setQueryData<InboxTask[]>(inboxKeys.tasks(WORKSPACE_ID), [task("issue-1")]);
+
+    const { result } = renderHook(() => useMarkInboxTask(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate("issue-1");
+
+    await waitFor(() => expect(markInboxTask).toHaveBeenCalledWith("issue-1"));
+    expect(tasksCache(queryClient)[0]).toMatchObject({
+      marked: true,
+      reasons: ["assigned", "manual"],
+    });
   });
 });

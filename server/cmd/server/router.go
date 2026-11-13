@@ -2286,6 +2286,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/archive-all", h.ArchiveAllInbox)
 				r.Post("/archive-all-read", h.ArchiveAllReadInbox)
 				r.Post("/archive-completed", h.ArchiveCompletedInbox)
+				// Tasks under Inbox (Matas fork): the issues the member has
+				// to act on, plus marking an issue as a task by hand.
+				r.Get("/tasks", h.ListInboxTasks)
+				r.Put("/tasks/{issueId}", h.MarkInboxTask)
+				r.Delete("/tasks/{issueId}", h.RemoveInboxTask)
 				r.Post("/{id}/read", h.MarkInboxRead)
 				r.Post("/{id}/unread", h.MarkInboxUnread)
 				r.Post("/{id}/archive", h.ArchiveInboxItem)

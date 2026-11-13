@@ -41,6 +41,8 @@ import {
   EMPTY_SEARCH_PROJECTS_RESPONSE,
   EMPTY_USER,
   InboxItemListSchema,
+  InboxTaskListSchema,
+  EMPTY_INBOX_TASKS,
   InboxUnreadSummarySchema,
   IssueTriggerPreviewSchema,
   ListIssuesResponseSchema,
@@ -1269,6 +1271,41 @@ describe("InboxUnreadSummarySchema", () => {
         ENDPOINT,
       ),
     ).toBe(EMPTY_INBOX_UNREAD_SUMMARY);
+  });
+});
+
+describe("InboxTaskListSchema", () => {
+  const ENDPOINT = { endpoint: "GET /api/inbox/tasks" };
+
+  it("parses tasks and keeps a reason this client does not know yet", () => {
+    const parsed = parseWithFallback(
+      [{ issue: baseIssue, reasons: ["review", "some_future_reason"], marked: false }],
+      InboxTaskListSchema,
+      EMPTY_INBOX_TASKS,
+      ENDPOINT,
+    );
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.issue.identifier).toBe("MUL-1");
+    expect(parsed[0]?.reasons).toEqual(["review", "some_future_reason"]);
+  });
+
+  it("defaults missing reasons and marked", () => {
+    const parsed = parseWithFallback(
+      [{ issue: baseIssue }],
+      InboxTaskListSchema,
+      EMPTY_INBOX_TASKS,
+      ENDPOINT,
+    );
+    expect(parsed[0]).toMatchObject({ reasons: [], marked: false });
+  });
+
+  it("returns the empty fallback on a malformed response", () => {
+    expect(
+      parseWithFallback({ tasks: "nope" }, InboxTaskListSchema, EMPTY_INBOX_TASKS, ENDPOINT),
+    ).toBe(EMPTY_INBOX_TASKS);
+    expect(
+      parseWithFallback([{ issue: { id: 1 } }], InboxTaskListSchema, EMPTY_INBOX_TASKS, ENDPOINT),
+    ).toBe(EMPTY_INBOX_TASKS);
   });
 });
 

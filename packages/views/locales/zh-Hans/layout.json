@@ -1,6 +1,7 @@
 {
   "nav": {
     "inbox": "收件箱",
+    "tasks": "待办",
     "chat": "聊天",
     "intake": "需求登记",
     "my_issues": "我的任务",

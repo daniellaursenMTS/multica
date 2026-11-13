@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { inboxKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
-import type { InboxItem } from "../types";
+import type { InboxItem, InboxTask } from "../types";
 
 export function useMarkInboxRead() {
   const qc = useQueryClient();
@@ -213,6 +213,64 @@ export function useArchiveCompletedInbox() {
     mutationFn: () => api.archiveCompletedInbox(),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.all(wsId) });
+    },
+  });
+}
+
+/**
+ * Put an issue on the member's task list by hand. Optimistic only when the
+ * issue is already on the list (it just gains the manual reason); a new entry
+ * needs the server's row, so it arrives with the refetch.
+ */
+export function useMarkInboxTask() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (issueId: string) => api.markInboxTask(issueId),
+    onMutate: async (issueId) => {
+      await qc.cancelQueries({ queryKey: inboxKeys.tasks(wsId) });
+      const prev = qc.getQueryData<InboxTask[]>(inboxKeys.tasks(wsId));
+      qc.setQueryData<InboxTask[]>(inboxKeys.tasks(wsId), (old) =>
+        old?.map((task) =>
+          task.issue.id === issueId && !task.marked
+            ? { ...task, marked: true, reasons: [...task.reasons, "manual"] }
+            : task,
+        ),
+      );
+      return { prev };
+    },
+    onError: (_err, _issueId, ctx) => {
+      if (ctx?.prev) qc.setQueryData(inboxKeys.tasks(wsId), ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: inboxKeys.tasks(wsId) });
+    },
+  });
+}
+
+/**
+ * Take an issue off the member's task list. The server keeps an issue the
+ * rules picked up off the list until a newer notification about it arrives,
+ * so dropping the row optimistically matches what the refetch returns.
+ */
+export function useRemoveInboxTask() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (issueId: string) => api.removeInboxTask(issueId),
+    onMutate: async (issueId) => {
+      await qc.cancelQueries({ queryKey: inboxKeys.tasks(wsId) });
+      const prev = qc.getQueryData<InboxTask[]>(inboxKeys.tasks(wsId));
+      qc.setQueryData<InboxTask[]>(inboxKeys.tasks(wsId), (old) =>
+        old?.filter((task) => task.issue.id !== issueId),
+      );
+      return { prev };
+    },
+    onError: (_err, _issueId, ctx) => {
+      if (ctx?.prev) qc.setQueryData(inboxKeys.tasks(wsId), ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: inboxKeys.tasks(wsId) });
     },
   });
 }

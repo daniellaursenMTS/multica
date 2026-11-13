@@ -1,4 +1,4 @@
-import type { IssuePriority, IssueStatus } from "./issue";
+import type { Issue, IssuePriority, IssueStatus } from "./issue";
 
 export type InboxSeverity = "action_required" | "attention" | "info";
 
@@ -64,4 +64,26 @@ export interface InboxItem {
   archived: boolean;
   created_at: string;
   details: Record<string, string> | null;
+}
+
+/**
+ * Why an issue is on the member's task list (`GET /api/inbox/tasks`, Matas
+ * fork). The server decides; see ListMemberTasks in issue_task_mark.sql.
+ * Kept open-ended (`string & {}`) so a reason this client does not know yet
+ * still renders.
+ */
+export type InboxTaskReason =
+  | "blocked"
+  | "review"
+  | "assigned"
+  | "mentioned"
+  | "manual"
+  | (string & {});
+
+/** One issue on the member's task list under Inbox. */
+export interface InboxTask {
+  issue: Issue;
+  reasons: InboxTaskReason[];
+  /** Marked as a task by hand (as opposed to picked up by a rule). */
+  marked: boolean;
 }

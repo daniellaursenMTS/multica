@@ -1,11 +1,15 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import type { InboxItem, InboxWorkspaceUnread } from "../types";
+import type { InboxItem, InboxTask, InboxWorkspaceUnread } from "../types";
 
 export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
   list: (wsId: string) => [...inboxKeys.all(wsId), "list"] as const,
   archived: (wsId: string) => [...inboxKeys.all(wsId), "archived"] as const,
+  // Tasks under Inbox (Matas fork). Nested under `all` on purpose: every inbox
+  // event already invalidates `all`, and a new notification is exactly what
+  // can put an issue on the task list or bring a dismissed one back.
+  tasks: (wsId: string) => [...inboxKeys.all(wsId), "tasks"] as const,
   // Account-level (not workspace-scoped): a single shared cache entry that
   // holds unread counts for every workspace the user belongs to.
   unreadSummary: () => ["inbox", "unread-summary"] as const,
@@ -30,6 +34,28 @@ export function archivedInboxListOptions(wsId: string) {
     queryKey: inboxKeys.archived(wsId),
     queryFn: () => api.listArchivedInbox(),
   });
+}
+
+/**
+ * The member's task list: the issues they have to act on, newest activity
+ * first. Which issues qualify is decided by the server.
+ */
+export function inboxTaskListOptions(wsId: string) {
+  return queryOptions({
+    queryKey: inboxKeys.tasks(wsId),
+    queryFn: () => api.listInboxTasks(),
+  });
+}
+
+const EMPTY_TASKS: InboxTask[] = [];
+
+/** Task list for the workspace; empty while loading or without a workspace. */
+export function useInboxTasks(wsId: string | null | undefined): InboxTask[] {
+  const { data } = useQuery({
+    ...inboxTaskListOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+  return data ?? EMPTY_TASKS;
 }
 
 /**

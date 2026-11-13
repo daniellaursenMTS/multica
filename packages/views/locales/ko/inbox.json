@@ -108,5 +108,25 @@
     "archive_completed_failed": "완료된 항목을 보관하지 못했습니다",
     "unarchive_failed": "보관 해제에 실패했습니다",
     "archived_load_failed": "보관된 알림을 불러오지 못했습니다"
+  },
+  "tasks": {
+    "title": "할 일",
+    "back": "할 일",
+    "info": "처리해야 할 이슈: 나에게 할당된 열린 이슈, 내가 만든 이슈 중 에이전트가 리뷰를 요청했거나 막힌 이슈, 받은 편지함에 남아 있는 @멘션이 있는 이슈. 어떤 이슈든 직접 추가할 수도 있습니다.",
+    "empty": "지금 처리할 일이 없습니다",
+    "select_prompt": "볼 할 일을 선택하세요",
+    "reasons": {
+      "blocked": "막힘",
+      "review": "리뷰",
+      "assigned": "할당됨",
+      "mentioned": "멘션",
+      "manual": "직접 추가"
+    },
+    "add": "할 일에 추가",
+    "remove": "할 일에서 제거",
+    "added": "할 일에 추가했습니다",
+    "removed": "할 일에서 제거했습니다",
+    "add_failed": "할 일에 추가하지 못했습니다",
+    "remove_failed": "할 일에서 제거하지 못했습니다"
   }
 }

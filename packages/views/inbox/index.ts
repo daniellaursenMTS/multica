@@ -1,1 +1,1 @@
-export { InboxPage, TasksPage } from "./components";
+export { InboxPage } from "./components";

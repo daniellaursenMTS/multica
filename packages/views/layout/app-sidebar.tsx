@@ -68,7 +68,7 @@ import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/pat
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys, agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { inboxKeys, deduplicateInboxItems, inboxUnreadSummaryOptions, hasOtherWorkspaceUnread, unreadWorkspaceIds, useInboxTasks } from "@multica/core/inbox/queries";
+import { inboxKeys, deduplicateInboxItems, inboxUnreadSummaryOptions, hasOtherWorkspaceUnread, unreadWorkspaceIds } from "@multica/core/inbox/queries";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
 import { countUnreadChatMessages } from "@multica/core/chat/unread";
 import { useChatStore } from "@multica/core/chat";
@@ -114,7 +114,6 @@ const PINNED_PREVIEW_LIMIT = 5;
 // Only parameterless paths are valid nav destinations.
 type NavKey =
   | "inbox"
-  | "tasks"
   | "chat"
   | "myIssues"
   | "issues"
@@ -134,7 +133,6 @@ type NavKey =
 // icons derived from the destination path via routeIconForPath.
 type NavLabelKey =
   | "inbox"
-  | "tasks"
   | "chat"
   | "my_issues"
   | "issues"
@@ -161,7 +159,6 @@ const INTAKE_AGENT_NAME = "Mrs.Intake";
 
 const personalNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "inbox", labelKey: "inbox" },
-  { key: "tasks", labelKey: "tasks" },
   { key: "myIssues", labelKey: "my_issues" },
   { key: "chat", labelKey: "chat" },
 ];
@@ -497,7 +494,6 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     () => deduplicateInboxItems(inboxItems).filter((i) => !i.read).length,
     [inboxItems],
   );
-  const taskCount = useInboxTasks(wsId).length;
   // Chat tab unread badge: IM-style total of unread *messages* across chat
   // threads (countUnreadChatMessages is the shared definition — mobile's tab
   // badge derives from the same function, keeping the platforms in agreement).
@@ -816,13 +812,6 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                         {item.key === "inbox" && unreadCount > 0 && (
                           <CappedNumberFlow
                             value={unreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                        {item.key === "tasks" && taskCount > 0 && (
-                          <CappedNumberFlow
-                            value={taskCount}
                             animated={false}
                             className="ml-auto text-caption"
                           />

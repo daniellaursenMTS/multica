@@ -108,25 +108,5 @@
     "archive_completed_failed": "归档已完成失败",
     "unarchive_failed": "取消归档失败",
     "archived_load_failed": "无法加载已归档通知"
-  },
-  "tasks": {
-    "title": "待办",
-    "back": "待办",
-    "info": "需要你处理的事项：分配给你且未关闭的事项、你创建且智能体已提交评审或被阻塞的事项，以及收件箱中仍有 @提及你 的事项。你也可以手动添加任何事项。",
-    "empty": "目前没有需要你处理的事项",
-    "select_prompt": "选择一个待办查看",
-    "reasons": {
-      "blocked": "已阻塞",
-      "review": "待评审",
-      "assigned": "已分配",
-      "mentioned": "被提及",
-      "manual": "手动添加"
-    },
-    "add": "加入待办",
-    "remove": "移出待办",
-    "added": "已加入待办",
-    "removed": "已移出待办",
-    "add_failed": "无法加入待办",
-    "remove_failed": "无法移出待办"
   }
 }

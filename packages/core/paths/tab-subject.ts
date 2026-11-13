@@ -110,8 +110,6 @@ export function parseTabSubject(url: string): TabSubject {
         selectedKey: query.get("issue") || null,
         archived: query.get("view") === "archived",
       };
-    case "tasks":
-      return { kind: "page", page: "tasks" };
     case "chat":
       return { kind: "chat", sessionId: query.get("session") || null };
     case "runtimes":

@@ -90,12 +90,6 @@ export function onInboxInvalidate(qc: QueryClient, wsId: string) {
   qc.invalidateQueries({ queryKey: inboxKeys.all(wsId) });
 }
 
-// Refresh the task list (Matas fork) after an issue change that can move an
-// issue on or off it: created, deleted, or a status or assignee change.
-export function onInboxTasksInvalidate(qc: QueryClient, wsId: string) {
-  qc.invalidateQueries({ queryKey: inboxKeys.tasks(wsId) });
-}
-
 // Refresh the cross-workspace unread summary (workspace-switcher dot). The
 // summary spans every workspace, so it is invalidated on ANY inbox event
 // regardless of which workspace the event came from — including read/archive

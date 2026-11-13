@@ -44,7 +44,7 @@ import {
   invalidateLastActivitySortedIssueLists,
   invalidateUpdatedAtSortedIssueLists,
 } from "../issues/cache-coordinator";
-import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted, onInboxSummaryInvalidate, onInboxTasksInvalidate } from "../inbox/ws-updaters";
+import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted, onInboxSummaryInvalidate } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import {
   notificationPreferenceOptions,
@@ -1008,11 +1008,6 @@ export function useRealtimeSync(
         if (issue.status) {
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
-        // Status and assignee drive the task-list rules, and the actor's own
-        // change produces no inbox event for them to ride on.
-        if (payload.status_changed || payload.assignee_changed) {
-          onInboxTasksInvalidate(qc, wsId);
-        }
       }
     });
 
@@ -1020,10 +1015,7 @@ export function useRealtimeSync(
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
       const wsId = getCurrentWsId();
-      if (wsId) {
-        onIssueCreated(qc, wsId, issue);
-        onInboxTasksInvalidate(qc, wsId);
-      }
+      if (wsId) onIssueCreated(qc, wsId, issue);
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
@@ -1033,7 +1025,6 @@ export function useRealtimeSync(
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
         onInboxIssueDeleted(qc, wsId, issue_id);
-        onInboxTasksInvalidate(qc, wsId);
       }
     });
 

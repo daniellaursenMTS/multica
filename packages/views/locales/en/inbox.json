@@ -110,25 +110,5 @@
     "archive_completed_failed": "Failed to archive completed",
     "unarchive_failed": "Failed to unarchive",
     "archived_load_failed": "Failed to load archived notifications"
-  },
-  "tasks": {
-    "title": "Tasks",
-    "back": "Tasks",
-    "info": "Issues you need to act on: open issues assigned to you, issues you created that an agent has delivered for review or is blocked on, and issues where an @mention of you is still in your inbox. You can also add any issue by hand.",
-    "empty": "Nothing needs you right now",
-    "select_prompt": "Select a task to view it",
-    "reasons": {
-      "blocked": "Blocked",
-      "review": "Review",
-      "assigned": "Assigned",
-      "mentioned": "Mentioned",
-      "manual": "Added by you"
-    },
-    "add": "Add to Tasks",
-    "remove": "Remove from Tasks",
-    "added": "Added to Tasks",
-    "removed": "Removed from Tasks",
-    "add_failed": "Could not add to Tasks",
-    "remove_failed": "Could not remove from Tasks"
   }
 }

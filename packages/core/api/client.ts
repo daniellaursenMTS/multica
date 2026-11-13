@@ -41,7 +41,6 @@ import type {
   CreateRuntimeProfileRequest,
   UpdateRuntimeProfileRequest,
   InboxItem,
-  InboxTask,
   InboxWorkspaceUnread,
   IssueSubscriber,
   Comment,
@@ -380,8 +379,6 @@ import {
   EMPTY_INBOX_UNREAD_SUMMARY,
   InboxItemListSchema,
   EMPTY_INBOX_ITEMS,
-  InboxTaskListSchema,
-  EMPTY_INBOX_TASKS,
   NotificationPreferenceResponseSchema,
   EMPTY_NOTIFICATION_PREFERENCE_RESPONSE,
   LabelSchema,
@@ -2519,26 +2516,6 @@ export class ApiClient {
 
   async archiveCompletedInbox(): Promise<{ count: number }> {
     return this.fetch("/api/inbox/archive-completed", { method: "POST" });
-  }
-
-  // Tasks under Inbox (Matas fork): the issues the current member has to act
-  // on. A malformed response renders an empty task list.
-  async listInboxTasks(): Promise<InboxTask[]> {
-    const raw = await this.fetch<unknown>("/api/inbox/tasks");
-    return parseWithFallback(raw, InboxTaskListSchema, EMPTY_INBOX_TASKS, {
-      endpoint: "GET /api/inbox/tasks",
-    });
-  }
-
-  // Put an issue on the task list by hand.
-  async markInboxTask(issueId: string): Promise<void> {
-    await this.fetch(`/api/inbox/tasks/${encodeURIComponent(issueId)}`, { method: "PUT" });
-  }
-
-  // Take an issue off the task list. One the rules picked up stays off until
-  // a newer notification about it arrives.
-  async removeInboxTask(issueId: string): Promise<void> {
-    await this.fetch(`/api/inbox/tasks/${encodeURIComponent(issueId)}`, { method: "DELETE" });
   }
 
   // Notification preferences

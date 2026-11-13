@@ -47,7 +47,6 @@ import type {
   GitHubConnectResponse,
   GitHubPullRequest,
   InboxItem,
-  InboxTask,
   InboxWorkspaceUnread,
   Label,
   MemberWithUser,
@@ -2427,20 +2426,6 @@ export const InboxItemListSchema = z.array(
 );
 
 export const EMPTY_INBOX_ITEMS: InboxItem[] = [];
-
-// Tasks under Inbox (`/api/inbox/tasks` GET, Matas fork). `reasons` stays
-// z.string() so a reason this client does not know yet still parses.
-export const InboxTaskListSchema = z.array(
-  z
-    .object({
-      issue: IssueSchema,
-      reasons: z.array(z.string()).default([]),
-      marked: z.boolean().default(false),
-    })
-    .loose(),
-);
-
-export const EMPTY_INBOX_TASKS: InboxTask[] = [];
 
 // ---------------------------------------------------------------------------
 // Billing schemas (cloud-billing proxy surface)

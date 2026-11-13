@@ -132,7 +132,6 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
   useCurrentWorkspace: () => ({ id: "ws-1", name: "Acme", slug: "acme" }),
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
-    tasks: () => "/acme/tasks",
     chat: () => "/acme/chat",
     myIssues: () => "/acme/my-issues",
     issues: () => "/acme/issues",
@@ -166,7 +165,6 @@ vi.mock("@multica/core/inbox/queries", () => ({
   deduplicateInboxItems: (items: unknown[]) => items,
   inboxKeys: { list: () => ["inbox"], unreadSummary: () => ["inbox", "unread-summary"] },
   inboxUnreadSummaryOptions: () => ({ queryKey: ["inbox", "unread-summary"] }),
-  useInboxTasks: () => [],
   hasOtherWorkspaceUnread: (
     entries: { workspace_id: string; count: number }[],
     currentWsId: string | null,

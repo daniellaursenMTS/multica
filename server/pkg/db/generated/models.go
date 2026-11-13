@@ -892,15 +892,6 @@ type IssueSubscriber struct {
 	OptOutScope    pgtype.Text        `json:"opt_out_scope"`
 }
 
-type IssueTaskMark struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	State       string             `json:"state"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
 type IssueToLabel struct {
 	IssueID pgtype.UUID `json:"issue_id"`
 	LabelID pgtype.UUID `json:"label_id"`

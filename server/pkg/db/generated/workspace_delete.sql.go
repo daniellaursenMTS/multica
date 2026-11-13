@@ -76,9 +76,6 @@ deleted_notification_preferences AS (
 deleted_pins AS (
     DELETE FROM pinned_item WHERE pinned_item.workspace_id = $1
 ),
-deleted_task_marks AS (
-    DELETE FROM issue_task_mark WHERE issue_task_mark.workspace_id = $1
-),
 deleted_daemon_tokens AS (
     DELETE FROM daemon_token WHERE daemon_token.workspace_id = $1
 ),

@@ -41,12 +41,12 @@ func matasMCPTools() []any {
 	ro := map[string]any{"readOnlyHint": true, "openWorldHint": false}
 	rw := map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 	return []any{
-		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
+		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: project number (Capex number and a sequence, e.g. 1004-2; only projects with a Capex have one), status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_list_agents", "description": "List the agents a task can be given to, with what each does.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
-		map[string]any{"name": "multica_project_summary", "description": "Get what a project's owners chose to share: their approved summary, or a note that the whole project hub is shared (then use multica_ask_project) or that nothing is shared.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID from multica_list_projects.")}), "annotations": ro},
-		map[string]any{"name": "multica_ask_project", "description": "Ask the Knowledge Hub agent a question. It answers from Matas' own sources and from projects only as far as their owners share them. Asynchronous: poll multica_get_issue with the returned id; the answer appears there as `answer` within a few minutes.", "inputSchema": obj([]string{"request_id", "question"}, map[string]any{"request_id": str("Stable UUID for this question; reuse it to retry."), "question": str("The question, 1–4000 characters."), "project_id": str("Optional project UUID the question is about.")}), "annotations": rw},
-		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID; the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today.")}), "annotations": rw},
-		map[string]any{"name": "multica_create_task", "description": "Create a task in a project and give it to an agent (see multica_list_agents). Poll multica_get_issue for status; the agent's latest reply appears as `answer`.", "inputSchema": obj([]string{"request_id", "project_id", "title", "agent"}, map[string]any{"request_id": str("Stable UUID for this task; reuse it to retry."), "project_id": str("Project UUID."), "title": str("Task title, 1–200 characters."), "description": str("What to do, the background and what done looks like."), "agent": str("Agent name or UUID."), "start": map[string]any{"type": "boolean", "description": "Start the agent now (default true). False parks the task in backlog."}}), "annotations": rw},
+		map[string]any{"name": "multica_project_summary", "description": "Get what a project's owners chose to share: their approved summary, or a note that the whole project hub is shared (then use multica_ask_project) or that nothing is shared.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID or project number (e.g. 1004-2) from multica_list_projects.")}), "annotations": ro},
+		map[string]any{"name": "multica_ask_project", "description": "Ask the Knowledge Hub agent a question. It answers from Matas' own sources and from projects only as far as their owners share them. Asynchronous: poll multica_get_issue with the returned id; the answer appears there as `answer` within a few minutes.", "inputSchema": obj([]string{"request_id", "question"}, map[string]any{"request_id": str("Stable UUID for this question; reuse it to retry."), "question": str("The question, 1–4000 characters."), "project_id": str("Optional project the question is about: its UUID or its project number, e.g. 1004-2.")}), "annotations": rw},
+		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID or project number (e.g. 1004-2); the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today.")}), "annotations": rw},
+		map[string]any{"name": "multica_create_task", "description": "Create a task in a project and give it to an agent (see multica_list_agents). Poll multica_get_issue for status; the agent's latest reply appears as `answer`.", "inputSchema": obj([]string{"request_id", "project_id", "title", "agent"}, map[string]any{"request_id": str("Stable UUID for this task; reuse it to retry."), "project_id": str("Project UUID or project number, e.g. 1004-2."), "title": str("Task title, 1–200 characters."), "description": str("What to do, the background and what done looks like."), "agent": str("Agent name or UUID."), "start": map[string]any{"type": "boolean", "description": "Start the agent now (default true). False parks the task in backlog."}}), "annotations": rw},
 		matasUsageTool(),
 	}
 }
@@ -92,10 +92,17 @@ func (h *Handler) matasWorkspace(r *http.Request) (pgtype.UUID, pgtype.UUID, err
 	return ws, member, nil
 }
 
+// matasProject finds a project by its UUID or its project number (e.g. 1004-2).
 func (h *Handler) matasProject(r *http.Request, ws pgtype.UUID, id string) (db.Project, error) {
+	id = strings.TrimSpace(id)
 	pid, err := util.ParseUUID(id)
 	if err != nil {
-		return db.Project{}, errors.New("project_id must be a UUID")
+		if !matasProjectNumberRE.MatchString(id) {
+			return db.Project{}, errors.New("project_id must be a project UUID or a project number such as 1004-2")
+		}
+		if pid, err = h.matasProjectByNumber(r.Context(), ws, id); err != nil {
+			return db.Project{}, err
+		}
 	}
 	p, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{ID: pid, WorkspaceID: ws})
 	if err != nil {
@@ -128,9 +135,12 @@ func (h *Handler) mcpListProjects(r *http.Request, raw json.RawMessage) (any, er
 			item["due_date"] = p.DueDate.Time.Format("2006-01-02")
 		}
 		if m, ok := intakes[id]; ok {
+			if n := metaString(m, matasNumberKey); n != "" {
+				item["number"] = n
+			}
 			fields := map[string]json.RawMessage{}
 			for k, v := range m {
-				if strings.HasPrefix(k, "pf_") && k != "pf_intake" {
+				if strings.HasPrefix(k, "pf_") && k != "pf_intake" && k != matasNumberKey {
 					fields[strings.TrimPrefix(k, "pf_")] = v
 				}
 			}
@@ -304,7 +314,7 @@ func (h *Handler) mcpAskProject(r *http.Request, raw json.RawMessage) (any, erro
 			return nil, err
 		}
 		project = pr.ID
-		text = "Spørgsmål om projektet «" + pr.Title + "»:\n\n" + q
+		text = "Spørgsmål om projektet «" + matasNumbered(h.matasNumberOf(r.Context(), ws, pr.ID), pr.Title) + "»:\n\n" + q
 	}
 	agent, err := h.matasAgent(r, ws, matasKnowledgeAgent)
 	if err != nil {
@@ -370,7 +380,8 @@ func (h *Handler) mcpAddProjectUpdate(r *http.Request, raw json.RawMessage) (any
 	body := "Projekt: " + spec.Name + " · Taler: " + speaker + " · Dato: " + day + "\n\n" + text + "\n"
 	meta := map[string]json.RawMessage{"intake_source": json.RawMessage(`"opus_mcp"`), "gdpr_review_only": json.RawMessage(`true`), "note_source": json.RawMessage(`"mcp"`)}
 	meta["intake_request_id"], _ = json.Marshal(p.RequestID)
-	return h.matasCreate(r, p.RequestID, "Opdatering: "+spec.Name+" — "+speaker+", "+day, body, project.ID, agent, "todo", meta)
+	name := matasNumbered(metaString(intakes[util.UUIDToString(project.ID)], matasNumberKey), spec.Name)
+	return h.matasCreate(r, p.RequestID, "Opdatering: "+name+" — "+speaker+", "+day, body, project.ID, agent, "todo", meta)
 }
 
 func (h *Handler) mcpCreateTask(r *http.Request, raw json.RawMessage) (any, error) {

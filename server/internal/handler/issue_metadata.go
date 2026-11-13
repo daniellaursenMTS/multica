@@ -140,6 +140,11 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if matasNumberReserved(key) {
+		writeError(w, http.StatusBadRequest, key+" is assigned by the server and cannot be set")
+		return
+	}
+
 	var req SetIssueMetadataKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -183,6 +188,15 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to set metadata key")
 		return
 	}
+	// A Matas project gets its project number when its intake first has a Capex. The key is
+	// already written; a failed assignment is retried the next time pf_capex is set.
+	if key == "pf_capex" || key == "pf_intake" {
+		if numbered, _, err := h.matasAssignProjectNumber(r.Context(), updated); err != nil {
+			slog.Warn("project number not assigned", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
+		} else {
+			updated = numbered
+		}
+	}
 
 	workspaceID := uuidToString(updated.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
@@ -200,6 +214,10 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	key := chi.URLParam(r, "key")
 	if err := validateIssueMetadataKey(key); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if matasNumberReserved(key) {
+		writeError(w, http.StatusBadRequest, key+" is assigned by the server and cannot be removed")
 		return
 	}
 

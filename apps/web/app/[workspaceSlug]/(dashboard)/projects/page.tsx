@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ProjectsPage } from "@multica/views/projects/components";
-import { Diagram, Overview, ProjectForm, usePortfolio, type ProjectSort } from "./_portfolio/portfolio";
+import { Diagram, matchesSearch, Overview, ProjectForm, usePortfolio, type ProjectSort } from "./_portfolio/portfolio";
 
 // One list of projects: Multica projects grouped by status, with Portfolio fields and ◇ for a
 // diamond, then ClickUp intake that has not been moved yet. Multica's own list stays one click away.
@@ -15,8 +15,9 @@ function ProjectList() {
   const { pf, index, rows, me, isMine, error, loading } = usePortfolio();
   const [creating, setCreating] = useState(false);
   const [showClickup, setShowClickup] = useState(false);
+  const [search, setSearch] = useState("");
   const mine = params.get("filter") === "mine";
-  const sort: ProjectSort = params.get("sort") === "activity" ? "activity" : "status";
+  const sort: ProjectSort = params.get("sort") === "activity" ? "activity" : params.get("sort") === "number" ? "number" : "status";
   const open = (id: string) => router.push(p.projectDetail(id));
   // Filter and sort are both in the URL, so a link or reload keeps the view.
   const setParam = (key: string, v: string | null) => {
@@ -29,7 +30,7 @@ function ProjectList() {
 
   if (params.get("view") === "classic") return <ProjectsPage />;
 
-  const shown = mine ? rows.filter(isMine) : rows;
+  const shown = (mine ? rows.filter(isMine) : rows).filter((r) => matchesSearch(r, search));
   const multica = shown.filter((r) => r.source !== "clickup");
   const clickup = shown.filter((r) => r.source === "clickup");
   const meSlug = index?.people.find((x) => x.name === me)?.slug;
@@ -45,6 +46,8 @@ function ProjectList() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Søg i projekter"
+              placeholder="Søg navn eller nr., fx 1004-2" className="w-56 rounded-md border bg-background px-2 py-1.5 text-sm" />
             <nav className="flex gap-1 rounded-md border p-0.5 text-sm" aria-label="Filter">
               {([[null, "Alle"], ["mine", "Mine projekter"]] as const).map(([k, label]) => (
                 <button key={label} type="button" aria-pressed={(k === "mine") === mine} onClick={() => setFilter(k)}
@@ -54,7 +57,7 @@ function ProjectList() {
               ))}
             </nav>
             <nav className="flex gap-1 rounded-md border p-0.5 text-sm" aria-label="Sortering">
-              {([["status", "Standard"], ["activity", "Seneste aktivitet"]] as const).map(([k, label]) => (
+              {([["status", "Standard"], ["activity", "Seneste aktivitet"], ["number", "Projektnummer"]] as const).map(([k, label]) => (
                 <button key={k} type="button" aria-pressed={sort === k} onClick={() => setParam("sort", k === "status" ? null : k)}
                   className={`rounded px-3 py-1 ${sort === k ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60"}`}>
                   {label}
@@ -75,7 +78,7 @@ function ProjectList() {
 
         {loading && <div className="h-64 animate-pulse rounded-lg bg-muted" aria-label="Henter projekter" />}
         {!loading && (multica.length ? <Overview rows={multica} open={open} sort={sort} /> : (
-          <p className="text-sm text-muted-foreground">{mine ? "Du er ikke med i nogen projekter endnu." : "Ingen projekter endnu."}</p>
+          <p className="text-sm text-muted-foreground">{search.trim() ? `Ingen projekter matcher «${search.trim()}».` : mine ? "Du er ikke med i nogen projekter endnu." : "Ingen projekter endnu."}</p>
         ))}
 
         {clickup.length > 0 && (

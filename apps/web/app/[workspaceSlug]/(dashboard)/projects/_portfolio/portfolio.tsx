@@ -417,8 +417,8 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
       {capex.error && <p role="alert" className="p-3 text-sm text-destructive">Forbrugsposter kunne ikke hentes: {capex.error.message}</p>}
       <table className="w-full min-w-[980px] table-fixed text-sm">
         <colgroup>
-          <col className="w-[22%]" /><col className="w-[9%]" /><col className="w-[11%]" />{hasUsage && <col className="w-[14%]" />}
-          <col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
+          <col className="w-[19%]" /><col className="w-[9%]" /><col className="w-[11%]" />{hasUsage && <col className="w-[14%]" />}
+          <col className="w-[12%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-background text-xs text-muted-foreground">
           <tr className="divide-x border-b">

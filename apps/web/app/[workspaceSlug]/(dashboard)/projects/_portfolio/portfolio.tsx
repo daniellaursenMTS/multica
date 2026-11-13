@@ -400,10 +400,10 @@ function useProjectUsage(rows: Row[], manual: CapexManual[]) {
 
 /** The project list: one table, so every status group shares the same columns. */
 export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (id: string) => void; sort?: ProjectSort }) {
-  // Status groups stay; «Seneste aktivitet» only orders the projects inside each group.
-  const ordered = sort === "activity" ? rows.toSorted(byActivity) : rows;
-  const groups = STATUS_ORDER.map((s) => ({ s, items: ordered.filter((r) => r.status === s) })).concat(
-    [{ s: "andet", items: ordered.filter((r) => !STATUS_ORDER.includes(r.status)) }],
+  // «Seneste aktivitet» is one list across every status, newest first; each row shows its status.
+  const flat = sort === "activity";
+  const groups = flat ? [{ s: "", items: rows.toSorted(byActivity) }] : STATUS_ORDER.map((s) => ({ s, items: rows.filter((r) => r.status === s) })).concat(
+    [{ s: "andet", items: rows.filter((r) => !STATUS_ORDER.includes(r.status)) }],
   ).filter((g) => g.items.length);
   const [closed, setClosed] = useState<Record<string, boolean>>({ closed: true });
   const capex = useCapex();
@@ -433,7 +433,7 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
         </thead>
         {groups.map(({ s, items }) => (
           <tbody key={s}>
-            <tr className="border-b bg-muted/40">
+            {!flat && <tr className="border-b bg-muted/40">
               <td colSpan={hasUsage ? 10 : 9} className="px-3 py-1.5">
                 <button type="button" onClick={() => setClosed((c) => ({ ...c, [s]: !c[s] }))} aria-expanded={!closed[s]}
                   className="flex items-center gap-2.5 text-sm">
@@ -442,8 +442,8 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
                   <span className="text-xs text-muted-foreground">{items.length}</span>
                 </button>
               </td>
-            </tr>
-            {!closed[s] && items.map((r) => {
+            </tr>}
+            {(flat || !closed[s]) && items.map((r) => {
               const team = (r.fields.team as string[]) || [];
               const cx = capex.data?.items.find((c) => c.id === r.fields.capex_id);
               const u = r.multica_project ? usage.get(r.multica_project) : undefined;
@@ -458,8 +458,9 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
                       {r.demo && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">demo</span>}
                       {r.subtasks > 0 && <span className="shrink-0 text-xs text-muted-foreground">↳ {r.subtasks}</span>}
                     </div>
-                    {team.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1 pl-[18px]">
+                    {(flat || team.length > 0) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1 pl-[18px]">
+                        {flat && <StatusPill status={r.status} color={r.status_color} />}
                         {team.map((t) => <span key={t} className="rounded border px-1.5 text-[11px] leading-5 text-muted-foreground">{t}</span>)}
                       </div>
                     )}

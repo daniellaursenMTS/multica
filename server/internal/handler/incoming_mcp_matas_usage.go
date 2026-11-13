@@ -109,7 +109,7 @@ func matasUsageTool() any {
 			"request_id": str("Stable UUID for this report; reuse it to retry."),
 			"source":     str("The app's name, 1–80 characters, e.g. «ChatGPT – Marketing GPT». Keep it the same between reports."),
 			"capex_id":   str("Stable id of an active Capex number (not the number itself). Give this or project_id."),
-			"project_id": str("Project UUID from multica_list_projects. Give this or capex_id."),
+			"project_id": str("Project UUID or project number (e.g. 1004-2) from multica_list_projects. Give this or capex_id."),
 			"label":      str("Optional name the post is shown with; default the source. Only names a new post."),
 			"days":       map[string]any{"type": "array", "minItems": 1, "maxItems": matasUsageMaxCall, "items": day},
 		}},
@@ -236,32 +236,12 @@ func matasMergeUsage(stored *matasUsageEntry, days []matasUsageDay, today string
 
 // matasCapexItem is the active Capex with this stable id in the workspace's Capex register.
 func (h *Handler) matasCapexItem(r *http.Request, ws pgtype.UUID, id string) (map[string]any, error) {
-	rows, err := h.DB.Query(r.Context(), `SELECT metadata FROM issue WHERE workspace_id = $1 AND metadata @> '{"capex_register": true}'::jsonb LIMIT 2`, ws)
+	_, items, err := matasCapexRegister(r.Context(), h.DB, ws)
 	if err != nil {
-		return nil, errors.New("could not read the Capex register")
-	}
-	defer rows.Close()
-	var registers [][]byte
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, errors.New("could not read the Capex register")
-		}
-		registers = append(registers, raw)
-	}
-	if rows.Err() != nil || len(registers) != 1 {
-		return nil, errors.New("the workspace has no single Capex register")
-	}
-	m := map[string]json.RawMessage{}
-	_ = json.Unmarshal(registers[0], &m)
-	var catalog struct {
-		Items []map[string]any `json:"items"`
-	}
-	if json.Unmarshal([]byte(metaString(m, "capex_catalog")), &catalog) != nil {
-		return nil, errors.New("the Capex register could not be read")
+		return nil, err
 	}
 	var active []string
-	for _, item := range catalog.Items {
+	for _, item := range items {
 		if item["active"] == false {
 			continue
 		}
@@ -476,6 +456,9 @@ func (h *Handler) matasUsageReceipt(r *http.Request, ws, issueID pgtype.UUID, e 
 		allocation = map[string]any{"kind": "project", "project_id": *e.ProjectID}
 		if p, err := h.matasProject(r, ws, *e.ProjectID); err == nil {
 			allocation["title"] = p.Title
+			if n := h.matasNumberOf(r.Context(), ws, p.ID); n != "" {
+				allocation["number"] = n
+			}
 		}
 	case e.CapexID != nil:
 		allocation = map[string]any{"kind": "capex", "capex_id": *e.CapexID}

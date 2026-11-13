@@ -24,7 +24,7 @@ vi.mock("@multica/views/navigation", () => ({
 }));
 vi.mock("@multica/views/runtimes", () => ({ estimateCost: () => 0 }));
 
-import { AddUpdate, NewTask, ago, projectActivity, type Row } from "./portfolio";
+import { AddUpdate, NewTask, ago, byNumber, matchesSearch, numbered, projectActivity, type Row } from "./portfolio";
 
 const createdIssue = {
   id: "issue-1",
@@ -95,6 +95,7 @@ describe("portfolio document attachments", () => {
     const row = {
       id: "row-1",
       name: "Project",
+      number: "1004-2",
       multica_project: "project-1",
       dia_spec: { name: "Project", roles: { bo: { person: "Daniel" } } },
     } as Row;
@@ -119,6 +120,7 @@ describe("portfolio document attachments", () => {
 
     await waitFor(() => expect(mockApi.updateIssue).toHaveBeenCalledWith("issue-1", { status: "todo" }));
     expect(mockApi.createIssue).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/^Opdatering: \[1004-2\] Project — Daniel, /),
       project_id: "project-1",
       attachment_ids: ["attachment-budget.xlsx"],
       description: expect.stringContaining("Bilagene må ikke læses eller publiceres i hubben"),
@@ -175,5 +177,29 @@ describe("ago", () => {
     expect(ago(at(12, 1, 5), now)).toBe("i dag 01.05");
     expect(ago(at(11, 23, 30), now)).toBe("i går 23.30");
     expect(ago(at(10, 15), now)).toBe("2 dage siden");
+  });
+});
+
+describe("project numbers", () => {
+  const row = (name: string, number: string | null, capex?: string) =>
+    ({ id: name, name, number, fields: capex ? { capex } : {} }) as unknown as Row;
+
+  it("sorts by number within a Capex, 1004-2 before 1004-12, unnumbered last", () => {
+    const rows = [row("Uden", null), row("B", "1004-12"), row("A", "1004-2"), row("C", "1000-1"), row("Andet", null)];
+    expect(rows.toSorted(byNumber).map((r) => r.name)).toEqual(["C", "A", "B", "Andet", "Uden"]);
+  });
+
+  it("finds a project by name, number or Capex", () => {
+    const r = row("Video Transcriber", "1004-1", "1004 · Social Media");
+    expect(matchesSearch(r, "1004-1")).toBe(true);
+    expect(matchesSearch(r, "video 1004")).toBe(true);
+    expect(matchesSearch(r, "social")).toBe(true);
+    expect(matchesSearch(r, "1004-12")).toBe(false);
+    expect(matchesSearch(r, "")).toBe(true);
+  });
+
+  it("writes the number in front of the name", () => {
+    expect(numbered({ name: "Scrollspace", number: "1004-2" })).toBe("[1004-2] Scrollspace");
+    expect(numbered({ name: "Scrollspace", number: null })).toBe("Scrollspace");
   });
 });

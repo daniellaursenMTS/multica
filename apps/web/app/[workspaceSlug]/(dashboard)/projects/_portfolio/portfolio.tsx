@@ -29,6 +29,8 @@ export interface Row {
   source: "clickup" | "hub" | "multica";
   id: string;
   name: string;
+  /** Projektnummer, e.g. 1004-2: the Capex number and a sequence. The server sets it once. */
+  number?: string | null;
   url: string | null;
   status: string;
   status_color?: string;
@@ -124,8 +126,19 @@ export function projectActivity(issues: Issue[]): Map<string, string> {
   }
   return out;
 }
-export type ProjectSort = "status" | "activity";
+export type ProjectSort = "status" | "activity" | "number";
 const byActivity = (a: Row, b: Row) => (b.activity ?? "").localeCompare(a.activity ?? "");
+/** By project number, 1004-2 before 1004-12; projects without one last, by name. */
+export const byNumber = (a: Row, b: Row) =>
+  !a.number !== !b.number ? (a.number ? -1 : 1)
+    : (a.number ?? "").localeCompare(b.number ?? "", "da", { numeric: true }) || a.name.localeCompare(b.name, "da");
+/** «[1004-2] Navn», as titles and mails write a project with a number. */
+export const numbered = (r: Pick<Row, "name" | "number">) => (r.number ? `[${r.number}] ${r.name}` : r.name);
+/** Search the list by name, project number or Capex; every word must match. */
+export function matchesSearch(r: Row, q: string): boolean {
+  const text = [r.name, r.number, r.fields.capex, ...((r.fields.team as string[] | undefined) ?? [])].filter(Boolean).join(" ").toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => text.includes(w));
+}
 
 // ---- Project fields kept in Multica (step 3) -------------------------------------------------
 // A project's intake fields live as metadata on one "intake issue" in the project (pf_intake).
@@ -320,6 +333,9 @@ export function ProjectForm({ mode, row, project, onDone, onCancel }: {
             ))}
           </select>
           {!capex.data?.items.length && <span className="text-xs text-muted-foreground">Der er ingen Capex-numre endnu. En administrator opretter dem på Capex-siden.</span>}
+          {row?.number ? (
+            <span className="text-xs text-muted-foreground">Projektnummer {row.number}. Det ændres ikke, heller ikke hvis projektet skifter Capex.</span>
+          ) : f.capex && <span className="text-xs text-muted-foreground">Projektet får et projektnummer i Capex'ets serie, når du gemmer.</span>}
         </label>
       </div>
       <p className="text-xs text-muted-foreground tabular-nums">
@@ -401,8 +417,8 @@ function useProjectUsage(rows: Row[], manual: CapexManual[]) {
 /** The project list: one table, so every status group shares the same columns. */
 export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (id: string) => void; sort?: ProjectSort }) {
   // «Seneste aktivitet» is one list across every status, newest first; each row shows its status.
-  const flat = sort === "activity";
-  const groups = flat ? [{ s: "", items: rows.toSorted(byActivity) }] : STATUS_ORDER.map((s) => ({ s, items: rows.filter((r) => r.status === s) })).concat(
+  const flat = sort !== "status";
+  const groups = flat ? [{ s: "", items: rows.toSorted(sort === "number" ? byNumber : byActivity) }] : STATUS_ORDER.map((s) => ({ s, items: rows.filter((r) => r.status === s) })).concat(
     [{ s: "andet", items: rows.filter((r) => !STATUS_ORDER.includes(r.status)) }],
   ).filter((g) => g.items.length);
   const [closed, setClosed] = useState<Record<string, boolean>>({ closed: true });
@@ -415,13 +431,14 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
   return (
     <div className="overflow-x-auto rounded-lg border">
       {capex.error && <p role="alert" className="p-3 text-sm text-destructive">Forbrugsposter kunne ikke hentes: {capex.error.message}</p>}
-      <table className="w-full min-w-[980px] table-fixed text-sm">
+      <table className="w-full min-w-[1040px] table-fixed text-sm">
         <colgroup>
-          <col className="w-[19%]" /><col className="w-[9%]" /><col className="w-[11%]" />{hasUsage && <col className="w-[14%]" />}
-          <col className="w-[12%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
+          <col className="w-[6%]" /><col className="w-[17%]" /><col className="w-[8%]" /><col className="w-[11%]" />{hasUsage && <col className="w-[14%]" />}
+          <col className="w-[10%]" /><col className="w-[8%]" /><col className="w-[9%]" /><col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[5%]" />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-background text-xs text-muted-foreground">
           <tr className="divide-x border-b">
+            <th className="px-3 py-2 text-left font-medium" title="Projektnummer: Capex-nummer og løbenummer">Nr.</th>
             <th className="px-3 py-2 text-left font-medium">Projekt</th><th className={th}>Ansvarlig</th><th className={th}>Capex</th>
             {hasUsage && <th className={th} title="Agenternes tokens (input og output) plus manuelle Capex-poster på projektet, fx Claude Code, og anslået pris til listepris">Forbrug · {USAGE_DAYS} dage</th>}
             <th className={th} title="Seneste kommentar, agentkørsel eller ændring på et af projektets issues">Aktivitet</th>
@@ -434,7 +451,7 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
         {groups.map(({ s, items }) => (
           <tbody key={s}>
             {!flat && <tr className="border-b bg-muted/40">
-              <td colSpan={hasUsage ? 10 : 9} className="px-3 py-1.5">
+              <td colSpan={hasUsage ? 11 : 10} className="px-3 py-1.5">
                 <button type="button" onClick={() => setClosed((c) => ({ ...c, [s]: !c[s] }))} aria-expanded={!closed[s]}
                   className="flex items-center gap-2.5 text-sm">
                   <span className="w-3 text-muted-foreground">{closed[s] ? "▸" : "▾"}</span>
@@ -449,6 +466,7 @@ export function Overview({ rows, open, sort = "status" }: { rows: Row[]; open: (
               const u = r.multica_project ? usage.get(r.multica_project) : undefined;
               return (
                 <tr key={r.id} onClick={() => open(r.id)} className="cursor-pointer divide-x border-b text-center align-middle last:border-0 hover:bg-accent/50">
+                  <td className="px-3 py-2.5 text-left whitespace-nowrap tabular-nums text-muted-foreground">{r.number ?? "—"}</td>
                   <td className="px-3 py-2.5 text-left">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span className="w-3 shrink-0 text-[#CF022D]" title={r.hub ? "Har diamant og projekt-chat" : undefined}>{r.hub ? "◇" : ""}</span>
@@ -1284,7 +1302,7 @@ export function AddUpdate({ row, agents }: { row: Row; agents: Agent[] }) {
       // So does the deck; the gate extracts it on the Mac and releases slide by slide.
       const deckFile = deck ? (await uploadProjectFiles([deck], (file) => api.uploadFile(file)))[0] : null;
       const issue = await api.createIssue({
-        title: `Opdatering: ${projectName} — ${speaker}, ${day}`, project_id: row.multica_project ?? undefined, status: "backlog",
+        title: `Opdatering: ${numbered({ name: projectName, number: row.number })} — ${speaker}, ${day}`, project_id: row.multica_project ?? undefined, status: "backlog",
         assignee_type: "agent", assignee_id: orchestrator.id, allow_duplicate: true,
         attachment_ids: [...attachments, ...documentAttachments, ...(deckFile ? [deckFile] : [])].map((a) => a.id),
         description: `Projekt: ${projectName} · Taler: ${speaker} · Dato: ${day}\n\n${text.trim()}\n`
@@ -1388,6 +1406,10 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
       )}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm sm:grid-cols-[max-content_1fr_max-content_1fr]">
         <dt className="text-muted-foreground">Status</dt><dd><StatusPill status={row.status} color={row.status_color} /></dd>
+        {row.source !== "clickup" && <>
+          <dt className="text-muted-foreground" title="Capex-nummer og løbenummer. Tildeles, når projektet får et Capex, og ændres aldrig.">Projektnummer</dt>
+          <dd className="tabular-nums">{row.number ?? <span className="text-muted-foreground">— (intet Capex)</span>}</dd>
+        </>}
         <dt className="text-muted-foreground">Ansvarlig</dt>
         <dd className="flex items-center gap-2"><Avatars people={row.assignees} />{row.assignees.map((a) => a.name).filter(Boolean).join(", ")}</dd>
         <dt className="text-muted-foreground">Datoer</dt><dd>{date(row.start_date)} → {date(row.due_date)}</dd>
@@ -1592,6 +1614,7 @@ export function usePortfolio() {
       out.push({
         ...(hub ?? {}),
         source: "multica", id: pr.id, name: pr.title,
+        number: typeof intake?.metadata.pf_number === "string" ? intake.metadata.pf_number : null,
         url: (intake?.metadata.pf_clickup_url as string) || hub?.url || null,
         status: (intake?.metadata.pf_status as string) || PROJECT_TO_PF[pr.status] || "open",
         assignees: hub?.assignees?.length ? hub.assignees : person(pr.lead_type === "member" ? pr.lead_id : null),

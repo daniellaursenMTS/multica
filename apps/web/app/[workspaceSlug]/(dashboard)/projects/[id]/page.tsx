@@ -38,6 +38,7 @@ function ProjectPage({ id }: { id: string }) {
             {row?.hub && <span className="mr-2 text-[#CF022D]" title="Har diamant">◇</span>}
             {row?.name ?? project(row)?.title ?? (loading ? "…" : "Projekt")}
           </h1>
+          {row?.number && <span className="rounded border px-1.5 py-0.5 text-sm tabular-nums text-muted-foreground" title="Projektnummer">{row.number}</span>}
           {row?.demo && <span className="rounded bg-muted px-1.5 py-0.5 text-xs uppercase">demo</span>}
           {row?.multica_project && !editing && (
             <button type="button" onClick={() => { setEditing(true); if (view !== "overview") go("overview"); }}

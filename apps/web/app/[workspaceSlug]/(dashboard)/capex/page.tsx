@@ -9,7 +9,7 @@ import type { DashboardUsageDaily } from "@multica/core/types";
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { saveCapex, useCapex, usePortfolio, type CapexDay, type CapexItem } from "../projects/_portfolio/portfolio";
+import { byNumber, numbered, saveCapex, useCapex, usePortfolio, type CapexDay, type CapexItem } from "../projects/_portfolio/portfolio";
 
 import { compactUsage, daysBefore, importedUsage, scaleUsage, usageRange, usageToday, usageTotal, type CapexManual, type UsageDraft } from "../projects/_portfolio/capex-usage";
 import { saveUsage, removeUsage } from "../projects/_portfolio/capex-usage-api";
@@ -201,7 +201,8 @@ export default function CapexPage() {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const usageWindowStart = daysBefore(iso(new Date()), USAGE_DAYS - 1);
 
-  const projects = rows.filter((r) => r.source !== "clickup" && r.multica_project);
+  // By project number, so each Capex lists its projects 1004-1, 1004-2 … with the number.
+  const projects = rows.filter((r) => r.source !== "clickup" && r.multica_project).toSorted(byNumber);
   const usage = useQueries({
     queries: [null, ...projects.map((r) => r.multica_project as string)].map((pid) => ({
       queryKey: ["capex-usage", workspace?.id, pid ?? "all", tz],
@@ -227,7 +228,7 @@ export default function CapexPage() {
       inProjects = { tokens: inProjects.tokens + u.tokens, usd: inProjects.usd + u.usd };
       const target = byCapex.get(String(r.fields.capex_id ?? "")) ?? none;
       target.tokens += u.tokens; target.usd += u.usd;
-      if (u.tokens > 0 || target !== none) target.projects.push(r.name);
+      if (u.tokens > 0 || target !== none) target.projects.push(numbered(r));
     });
     const all = sum(inPeriod(usage[0]?.data));
     const noProject: Line = { key: "noproject", number: "Uden projekt", description: "Intake, chats og opgaver, der ikke ligger i et projekt", projects: [],

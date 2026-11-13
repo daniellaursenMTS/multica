@@ -87,6 +87,7 @@ import { PAGE_GUTTER, PageHeader } from "../../layout/page-header";
 import { useTimeAgo } from "./inbox-list-item";
 import { InboxList } from "./inbox-list";
 import { InboxFilterMenu } from "./inbox-filter-menu";
+import { InboxQuickFilters } from "./inbox-quick-filters";
 import { InboxContextMenuProvider } from "./inbox-context-menu";
 import { ARCHIVED_VIEW_PARAM, type InboxView } from "./inbox-view";
 import { useTypeLabels } from "./inbox-detail-label";
@@ -640,6 +641,11 @@ export function InboxPage() {
   const listPanel = (
     <>
       {listHeader}
+      <InboxQuickFilters
+        wsId={wsId}
+        items={viewItems}
+        priorityFilterSupport={priorityFilterSupport}
+      />
       {isArchivedView && archivedBackRow}
       {list}
     </>

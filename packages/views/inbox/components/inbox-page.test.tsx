@@ -172,6 +172,9 @@ vi.mock("./inbox-list", () => ({
 vi.mock("./inbox-filter-menu", () => ({
   InboxFilterMenu: () => <button type="button">Filter inbox</button>,
 }));
+vi.mock("./inbox-quick-filters", () => ({
+  InboxQuickFilters: () => null,
+}));
 vi.mock("./inbox-list-item", () => ({ useTimeAgo: () => vi.fn() }));
 
 // Capture the row actions the page hands the context menu, so the read/unread

@@ -11,6 +11,7 @@
   },
   "filters": {
     "tooltip": "筛选收件箱",
+    "quick_filters": "快捷状态筛选",
     "active_count_other": "{{count}} 个筛选条件",
     "status": "状态",
     "priority": "优先级",

@@ -11,6 +11,7 @@
   },
   "filters": {
     "tooltip": "インボックスを絞り込む",
+    "quick_filters": "ステータスのクイックフィルター",
     "active_count_other": "{{count}} 件のフィルター",
     "status": "ステータス",
     "priority": "優先度",

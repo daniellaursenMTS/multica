@@ -11,6 +11,7 @@
   },
   "filters": {
     "tooltip": "Filter inbox",
+    "quick_filters": "Quick status filters",
     "active_count_one": "{{count}} active filter",
     "active_count_other": "{{count}} active filters",
     "status": "Status",

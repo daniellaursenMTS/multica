@@ -24,7 +24,7 @@ vi.mock("@multica/views/navigation", () => ({
 }));
 vi.mock("@multica/views/runtimes", () => ({ estimateCost: () => 0 }));
 
-import { AddUpdate, NewTask, ago, byNumber, matchesSearch, numbered, projectActivity, type Row } from "./portfolio";
+import { AddUpdate, CreateDiamond, NewTask, ago, byNumber, matchesSearch, numbered, projectActivity, type Row } from "./portfolio";
 
 const createdIssue = {
   id: "issue-1",
@@ -201,5 +201,41 @@ describe("project numbers", () => {
   it("writes the number in front of the name", () => {
     expect(numbered({ name: "Scrollspace", number: "1004-2" })).toBe("[1004-2] Scrollspace");
     expect(numbered({ name: "Scrollspace", number: null })).toBe("Scrollspace");
+  });
+});
+
+describe("diamond stakeholders", () => {
+  const row = {
+    id: "row-1", name: "Project", multica_project: "project-1", intake_issue: "intake-1", hub: "project",
+    dia_spec: { slug: "project", name: "Project", aliases: [], roles: { bo: { person: "Daniel" }, po: { person: null }, plo: { person: null }, to: { person: null } },
+      stakeholders: [{ name: "Eva", title: "Jura" }] },
+  } as unknown as Row;
+  const saved = () => JSON.parse(mockApi.setIssueMetadataKey.mock.calls.find((c) => c[1] === "dia_spec")![2]);
+
+  it("adds a stakeholder with a title and keeps the roles and the ones already there", async () => {
+    renderWithQuery(<CreateDiamond row={row} people={[]} rows={[row]} mode="roles" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ret roller og stakeholders" }));
+    expect(screen.getByLabelText("Stakeholder 1, navn")).toHaveProperty("value", "Eva");
+    fireEvent.click(screen.getByRole("button", { name: "+ Tilføj stakeholder" }));
+    fireEvent.change(screen.getByLabelText("Stakeholder 2, navn"), { target: { value: " Kundeservice " } });
+    fireEvent.click(screen.getByRole("button", { name: "Gem" }));
+
+    await waitFor(() => expect(mockApi.setIssueMetadataKey).toHaveBeenCalledWith("intake-1", "dia_spec", expect.any(String)));
+    expect(saved().stakeholders).toEqual([{ name: "Eva", title: "Jura" }, { name: "Kundeservice" }]);
+    expect(saved().roles.bo).toEqual({ person: "Daniel" });
+  });
+
+  it("removes the key when the last stakeholder goes, and refuses a title without a name", async () => {
+    renderWithQuery(<CreateDiamond row={row} people={[]} rows={[row]} mode="roles" />);
+    fireEvent.click(screen.getByRole("button", { name: "Ret roller og stakeholders" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Tilføj stakeholder" }));
+    fireEvent.change(screen.getByLabelText("Stakeholder 2, titel"), { target: { value: "Styregruppe" } });
+    expect(screen.getByText("En stakeholder har en titel men intet navn.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Gem" })).toHaveProperty("disabled", true);
+
+    for (const b of screen.getAllByRole("button", { name: "Fjern" }).reverse()) fireEvent.click(b);
+    fireEvent.click(screen.getByRole("button", { name: "Gem" }));
+    await waitFor(() => expect(mockApi.setIssueMetadataKey).toHaveBeenCalled());
+    expect(saved()).not.toHaveProperty("stakeholders");
   });
 });

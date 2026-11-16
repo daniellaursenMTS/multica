@@ -779,11 +779,16 @@ export function ProjectChatButton({ agentId, projectId }: { agentId: string; pro
   return <AppLink href={href} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Chat med projektet →</AppLink>;
 }
 
+/** Someone in the project who is not in the diamond, with a title the owner chooses.
+ *  Drawn to the right of the diamond; no status, reminders or account link. */
+export interface Stakeholder { name: string; title?: string }
 export interface DiaSpec {
   slug: string; name: string; aliases: string[]; archived?: boolean;
   roles: Record<RoleCode, { person: string | null; confirmed?: boolean; email?: string }>;
+  stakeholders?: Stakeholder[];
 }
 const ROLE_CODES: RoleCode[] = ["bo", "po", "plo", "to"];
+const MAX_STAKEHOLDERS = 12; // sync_diamonds.py draws at most this many beside the diamond
 const slugify = (x: string) =>
   x.toLowerCase().replace(/æ/g, "ae").replace(/ø/g, "oe").replace(/å/g, "aa")
     .normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 41);
@@ -797,7 +802,7 @@ export function parseSpec(raw: unknown): DiaSpec | null {
   }
 }
 
-/** Opret diamant / Ret roller. The diamond is saved at once in Multica, as `dia_spec` on the
+/** Opret diamant / Ret roller og stakeholders. The diamond is saved at once in Multica, as `dia_spec` on the
  *  project's intake issue; sync_diamonds.py on the Mac applies it to roster.json and the hub within
  *  a minute. The page shows the saved roles straight away and the sync state until it lands. */
 export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row; people: string[]; rows: Row[]; mode?: "create" | "roles" }) {
@@ -816,6 +821,12 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
     (row.dia_spec?.roles[r]?.confirmed === false || (!row.dia_spec && row.diamond?.[r]?.confirmed === false))])) as Record<RoleCode, boolean>;
   const [roles, setRoles] = useState(initial);
   const [unconfirmed, setUnconfirmed] = useState(wasUnconfirmed);
+  const savedStakeholders = editing ? row.dia_spec?.stakeholders ?? [] : [];
+  const [stakeholders, setStakeholders] = useState<{ name: string; title: string }[]>([]);
+  const cleanStakeholders: Stakeholder[] = stakeholders.map((x) => ({ name: x.name.trim(), title: x.title.trim() }))
+    .filter((x) => x.name || x.title).map((x) => (x.title ? x : { name: x.name }));
+  const setStakeholder = (i: number, k: "name" | "title", v: string) =>
+    setStakeholders((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const slug = editing ? row.dia_spec?.slug ?? row.hub ?? "" : slugify(name);
   // Roster names win: a Multica member whose name looks like someone already in a diamond
   // ("Daniel Laursen" vs "Daniel") is not suggested, so one person keeps one name everywhere.
@@ -842,14 +853,21 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
       return { ...x, [r]: next };
     });
   const filled = ROLE_CODES.some((r) => roles[r].person.trim());
-  const changes = ROLE_CODES.filter((r) => roles[r].person.trim() !== current(r))
-    .map((r) => `${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`);
+  const stakeholdersChanged = cleanStakeholders.length !== savedStakeholders.length ||
+    cleanStakeholders.some((x, i) => x.name !== savedStakeholders[i]?.name || (x.title ?? "") !== (savedStakeholders[i]?.title ?? ""));
+  const listed = (xs: Stakeholder[]) => xs.map((x) => (x.title ? `${x.name} (${x.title})` : x.name)).join(", ") || "ingen";
+  const changes = [...ROLE_CODES.filter((r) => roles[r].person.trim() !== current(r))
+    .map((r) => `${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`),
+    ...(stakeholdersChanged ? [`Stakeholders: ${listed(savedStakeholders)} → ${listed(cleanStakeholders)}`] : [])];
   const anyChange = !editing || changes.length > 0 || ROLE_CODES.some((r) => unconfirmed[r] !== wasUnconfirmed()[r]) || ROLE_CODES.some((r) => roles[r].email.trim());
   // Checks the sync would refuse, shown before saving. The sync checks again.
   const slugTaken = !editing && rows.some((r) => r.id !== row.id && (r.hub === slug || r.dia_spec?.slug === slug));
   const nameTaken = !editing && rows.find((r) => r.id !== row.id && (r.hub || r.dia_spec) &&
     [r.dia_spec?.name, ...(r.dia_spec?.aliases ?? [])].some((n) => n && n.toLowerCase() === name.trim().toLowerCase()));
+  const stakeholderNames = cleanStakeholders.map((x) => x.name.toLowerCase());
   const problem = slug.length < 2 ? "Navnet skal give en mappe på mindst to tegn."
+    : cleanStakeholders.some((x) => !x.name) ? "En stakeholder har en titel men intet navn."
+    : stakeholderNames.some((n, i) => stakeholderNames.indexOf(n) !== i) ? "En stakeholder står der to gange."
     : slugTaken ? `Mappen projects/${slug} er allerede brugt. Vælg et andet navn.`
     : nameTaken ? `«${name.trim()}» bruges allerede af ${nameTaken.name}. Opus-noter skal kunne skelne projekterne.` : null;
 
@@ -863,6 +881,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
           person: roles[r].person.trim() || null, ...(roles[r].email.trim() ? { email: roles[r].email.trim().toLowerCase() } : {}),
           ...(unconfirmed[r] && roles[r].person.trim() ? { confirmed: false } : {}),
         }])) as DiaSpec["roles"],
+        ...(cleanStakeholders.length ? { stakeholders: cleanStakeholders } : {}),
       };
       let intake = row.intake_issue ?? null;
       if (!intake) {
@@ -881,8 +900,11 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
 
   if (!open && editing) {
     return (
-      <button type="button" onClick={() => { setRoles(initial()); setUnconfirmed(wasUnconfirmed()); setOpen(true); }}
-        className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Ret roller</button>
+      <button type="button" onClick={() => {
+        setRoles(initial()); setUnconfirmed(wasUnconfirmed());
+        setStakeholders(savedStakeholders.map((x) => ({ name: x.name, title: x.title ?? "" }))); setOpen(true);
+      }}
+        className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Ret roller og stakeholders</button>
     );
   }
   if (!open) {
@@ -900,7 +922,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
   }
   return (
     <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (filled && anyChange && !problem) save.mutate(); }}>
-      <div className="text-sm font-medium"><span className="mr-1.5 text-[#CF022D]">◇</span>{editing ? `Ret roller — ${row.name}` : "Opret diamant"}</div>
+      <div className="text-sm font-medium"><span className="mr-1.5 text-[#CF022D]">◇</span>{editing ? `Ret roller og stakeholders — ${row.name}` : "Opret diamant"}</div>
       {!editing && <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">Navn i Opus-noter</span>
@@ -945,13 +967,34 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
         ved, hvem der spørger. Gemmes med det samme; hub og status følger med inden for et minut.
         {editing && " Tidligere noter bliver i hubben med den, der sagde dem; den nye person får sin egen status fra sin første note."}
       </p>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium">Stakeholders uden for diamanten</legend>
+        {stakeholders.map((x, i) => (
+          <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-center">
+            <input id={`dia-sh-${i}`} list="dia-people" value={x.name} onChange={(e) => setStakeholder(i, "name", e.target.value)}
+              className={input} placeholder="Navn" aria-label={`Stakeholder ${i + 1}, navn`} maxLength={80} />
+            <input id={`dia-sh-${i}-title`} value={x.title} onChange={(e) => setStakeholder(i, "title", e.target.value)}
+              className={input} placeholder="Titel, fx Juridisk rådgiver (valgfri)" aria-label={`Stakeholder ${i + 1}, titel`} maxLength={80} />
+            <button type="button" onClick={() => setStakeholders((xs) => xs.filter((_, j) => j !== i))}
+              className="rounded-md border px-2 py-1.5 text-sm hover:bg-accent">Fjern</button>
+          </div>
+        ))}
+        {stakeholders.length < MAX_STAKEHOLDERS && (
+          <button type="button" onClick={() => setStakeholders((xs) => [...xs, { name: "", title: "" }])}
+            className="self-start rounded-md border px-3 py-1.5 text-sm hover:bg-accent">+ Tilføj stakeholder</button>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Personer, der er med i projektet uden at have en rolle i diamanten. De står til højre for diamanten med den titel, du giver dem,
+          men får ingen status og ingen fredagsrykker.
+        </p>
+      </fieldset>
       {editing && changes.length > 0 && <ul className="text-sm">{changes.map((c) => <li key={c}>{c}</li>)}</ul>}
       {problem && <p className="text-sm text-[#CF022D]">{problem}</p>}
       {save.error && <p className="text-sm text-[#CF022D]">Kunne ikke gemme: {(save.error as Error).message}</p>}
       <div className="flex gap-2">
         <button type="submit" disabled={!filled || !anyChange || !!problem || save.isPending}
           className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50">
-          {save.isPending ? "Gemmer …" : editing ? "Gem roller" : "Opret diamant"}
+          {save.isPending ? "Gemmer …" : editing ? "Gem" : "Opret diamant"}
         </button>
         <button type="button" onClick={() => setOpen(false)} className="rounded-md border px-3 py-1.5 text-sm">Annullér</button>
       </div>
@@ -964,7 +1007,7 @@ export function DiamondSyncState({ row }: { row: Row }) {
   if (row.dia_error) {
     return (
       <p role="alert" className="rounded-md border border-[#CF022D]/40 px-3 py-2 text-sm text-[#CF022D]">
-        Diamanten er gemt i Multica, men kunne ikke synkroniseres: {row.dia_error} Ret den med «Ret roller».
+        Diamanten er gemt i Multica, men kunne ikke synkroniseres: {row.dia_error} Ret den med «Ret roller og stakeholders».
       </p>
     );
   }
@@ -1507,6 +1550,18 @@ export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: 
           );
         })}
       </ul>
+      {!!row.dia_spec?.stakeholders?.length && (
+        <div className="flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">Stakeholders uden for diamanten</div>
+          <ul className="flex flex-wrap gap-2 text-sm">
+            {row.dia_spec.stakeholders.map((x) => (
+              <li key={x.name} className="rounded-md border border-dashed px-3 py-1.5">
+                <span className="font-medium">{x.name}</span>{x.title && <span className="text-muted-foreground"> · {x.title}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {row.multica_project && (
         <div className="flex flex-wrap items-start gap-2">
           <CreateDiamond key={row.dia_spec ? JSON.stringify(row.dia_spec.roles) : "none"} row={row} people={people} rows={rows} mode="roles" />

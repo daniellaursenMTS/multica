@@ -24,7 +24,7 @@ vi.mock("@multica/views/navigation", () => ({
 }));
 vi.mock("@multica/views/runtimes", () => ({ estimateCost: () => 0 }));
 
-import { AddUpdate, CreateDiamond, NewTask, ago, byNumber, matchesSearch, numbered, projectActivity, type Row } from "./portfolio";
+import { AddUpdate, CreateDiamond, NewTask, ago, byNumber, matchesSearch, numbered, projectActivity, renameInSpec, type DiaSpec, type Row } from "./portfolio";
 
 const createdIssue = {
   id: "issue-1",
@@ -214,7 +214,7 @@ describe("diamond stakeholders", () => {
 
   it("adds a stakeholder with a title and keeps the roles and the ones already there", async () => {
     renderWithQuery(<CreateDiamond row={row} people={[]} rows={[row]} mode="roles" />);
-    fireEvent.click(screen.getByRole("button", { name: "Ret roller og stakeholders" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ret diamant" }));
     expect(screen.getByLabelText("Stakeholder 1, navn")).toHaveProperty("value", "Eva");
     fireEvent.click(screen.getByRole("button", { name: "+ Tilføj stakeholder" }));
     fireEvent.change(screen.getByLabelText("Stakeholder 2, navn"), { target: { value: " Kundeservice " } });
@@ -227,7 +227,7 @@ describe("diamond stakeholders", () => {
 
   it("removes the key when the last stakeholder goes, and refuses a title without a name", async () => {
     renderWithQuery(<CreateDiamond row={row} people={[]} rows={[row]} mode="roles" />);
-    fireEvent.click(screen.getByRole("button", { name: "Ret roller og stakeholders" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ret diamant" }));
     fireEvent.click(screen.getByRole("button", { name: "+ Tilføj stakeholder" }));
     fireEvent.change(screen.getByLabelText("Stakeholder 2, titel"), { target: { value: "Styregruppe" } });
     expect(screen.getByText("En stakeholder har en titel men intet navn.")).toBeTruthy();
@@ -237,5 +237,24 @@ describe("diamond stakeholders", () => {
     fireEvent.click(screen.getByRole("button", { name: "Gem" }));
     await waitFor(() => expect(mockApi.setIssueMetadataKey).toHaveBeenCalled());
     expect(saved()).not.toHaveProperty("stakeholders");
+  });
+});
+
+describe("renameInSpec", () => {
+  const spec = {
+    slug: "x", name: "X", aliases: [],
+    roles: { bo: { person: "Eva" }, po: { person: null }, plo: { person: "Daniel" }, to: { person: null } },
+    stakeholders: [{ name: "Eva", title: "Jura" }, { name: "Bo" }],
+  } as DiaSpec;
+
+  it("renames the person in roles and among the stakeholders, and carries the login", () => {
+    const out = renameInSpec(spec, "Eva", "Eva Hansen", "eva@matas.dk");
+    expect(out.roles.bo).toEqual({ person: "Eva Hansen", email: "eva@matas.dk", rename_from: "Eva" });
+    expect(out.stakeholders).toEqual([{ name: "Eva Hansen", title: "Jura" }, { name: "Bo" }]);
+    expect(spec.stakeholders?.[0]?.name).toBe("Eva");
+  });
+
+  it("merges onto a stakeholder already there and keeps the only title", () => {
+    expect(renameInSpec(spec, "Eva", "Bo", null).stakeholders).toEqual([{ name: "Bo", title: "Jura" }]);
   });
 });

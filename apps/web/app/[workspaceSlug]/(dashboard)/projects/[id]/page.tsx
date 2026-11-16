@@ -17,8 +17,12 @@ function ProjectPage({ id }: { id: string }) {
   const p = useWorkspacePaths();
   const { find, project, loading, agents, agentName, chatAgentId, index, rows, viewsKey, me } = usePortfolio();
   // Name suggestions for a new diamond: real people only — never the fictional demo cast.
+  // Stakeholders count too, so one person keeps one name whether in a role or beside the diamond.
   const demoHubs = new Set(rows.filter((r) => r.demo && r.hub).map((r) => r.hub as string));
-  const people = (index?.people ?? []).filter((x) => x.roles.some((r) => !demoHubs.has(r.project))).map((x) => x.name);
+  const people = Array.from(new Set([
+    ...(index?.people ?? []).filter((x) => x.roles.some((r) => !demoHubs.has(r.project))).map((x) => x.name),
+    ...rows.filter((r) => !r.demo && !r.dia_archived).flatMap((r) => r.dia_spec?.stakeholders?.map((x) => x.name) ?? []),
+  ]));
   const row = find(id);
   const projectId = row?.multica_project ?? (row ? null : id);
   const tabs: [View, string][] = [["overview", "Oversigt"]];

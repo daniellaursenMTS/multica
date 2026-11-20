@@ -13,7 +13,7 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { parseContext } from "./project-context";
+import { parseContext, useIsAdmin } from "./project-context";
 import {
   addProjectDocuments,
   DOCUMENT_ACCEPT,
@@ -1131,6 +1131,7 @@ export function ArchiveDiamond({ row }: { row: Row }) {
 
 export function ArchivedDiamond({ row }: { row: Row }) {
   const set = useSetArchived(row);
+  const admin = useIsAdmin();
   return (
     <div className="flex flex-col gap-2 rounded-md border border-dashed px-4 py-3 text-sm">
       <p className="text-muted-foreground">
@@ -1139,10 +1140,12 @@ export function ArchivedDiamond({ row }: { row: Row }) {
       </p>
       {row.dia_error && <p className="text-[#CF022D]">{row.dia_error}</p>}
       {set.error && <p className="text-[#CF022D]">{(set.error as Error).message}</p>}
-      <button type="button" disabled={set.isPending} onClick={() => set.mutate(false)}
-        className="self-start rounded-md border px-3 py-1.5 font-medium hover:bg-accent disabled:opacity-50">
-        <span className="mr-1.5 text-[#CF022D]">◇</span>{set.isPending ? "Genopretter …" : "Genopret diamant"}
-      </button>
+      {admin ? (
+        <button type="button" disabled={set.isPending} onClick={() => set.mutate(false)}
+          className="self-start rounded-md border px-3 py-1.5 font-medium hover:bg-accent disabled:opacity-50">
+          <span className="mr-1.5 text-[#CF022D]">◇</span>{set.isPending ? "Genopretter …" : "Genopret diamant"}
+        </button>
+      ) : <p className="text-xs text-muted-foreground">Kun workspace-admins kan genoprette diamanten.</p>}
     </div>
   );
 }
@@ -1483,6 +1486,7 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
 
 /** Diamant-fanen: de fire roller, hvornår hver sidst har opdateret, og diagrammet. */
 export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: Row; chatAgentId: string | null; people: string[]; rows: Row[]; viewsKey: string }) {
+  const admin = useIsAdmin();
   if (!row.hub && !row.dia_spec) {
     return (
       <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
@@ -1508,12 +1512,13 @@ export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: 
           );
         })}
       </ul>
-      {row.multica_project && (
+      {row.multica_project && admin && (
         <div className="flex flex-wrap items-start gap-2">
           <CreateDiamond key={row.dia_spec ? JSON.stringify(row.dia_spec.roles) : "none"} row={row} people={people} rows={rows} mode="roles" />
           {row.dia_spec && <ArchiveDiamond row={row} />}
         </div>
       )}
+      {row.multica_project && !admin && <p className="text-xs text-muted-foreground">Kun workspace-admins kan rette roller og arkivere diamanten.</p>}
       {row.hub ? <Diagram url={`/diamond-views/${slug}.svg?v=${viewsKey}`} label="diamant" />
         : <p className="text-sm text-muted-foreground">Diagrammet tegnes, når diamanten er synkroniseret.</p>}
       {chatAgentId && row.hub && (

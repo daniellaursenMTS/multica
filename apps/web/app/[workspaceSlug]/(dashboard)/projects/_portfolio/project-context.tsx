@@ -90,7 +90,8 @@ export function canEditContext(row: Row, opts: { me: string | null; email: strin
   return Object.values(row.dia_spec.roles).some((r) => !!r.person && ((!!opts.me && r.person === opts.me) || (!!email && r.email?.toLowerCase() === email)));
 }
 
-function useIsAdmin() {
+/** Workspace owner or admin: may edit any context, the portfolio context and existing diamonds. */
+export function useIsAdmin() {
   const workspace = useCurrentWorkspace();
   const myId = useAuthStore((s) => s.user?.id ?? null);
   const { data: members } = useQuery({ ...memberListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });

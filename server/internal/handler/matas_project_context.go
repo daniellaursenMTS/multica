@@ -350,6 +350,27 @@ func matasContextGuarded(key string) bool {
 	return key == matasContextKey || key == matasContextEditorsKey || key == matasPortfolioContextMark
 }
 
+// matasDiamondGuard: changing a diamond that exists — its roles, logins, archiving or restoring
+// it — is for workspace owners and admins only. Creating one where there is none stays open, so
+// a member's «Opret diamant» and Mrs.Intake's new_project.py keep working. status is 0 when the
+// write may go ahead.
+func (h *Handler) matasDiamondGuard(r *http.Request, issue db.Issue) (int, string) {
+	m := map[string]json.RawMessage{}
+	_ = json.Unmarshal(issue.Metadata, &m)
+	if _, exists := m["dia_spec"]; !exists {
+		return 0, ""
+	}
+	ws := uuidToString(issue.WorkspaceID)
+	if actorType, _ := h.resolveActor(r, requestUserID(r), ws); actorType != "member" {
+		return http.StatusForbidden, "agents cannot change a diamond; a workspace admin changes roles on the project page"
+	}
+	member, err := h.getWorkspaceMember(r.Context(), requestUserID(r), ws)
+	if err != nil || !roleAllowed(member.Role, "owner", "admin") {
+		return http.StatusForbidden, "only workspace owners and admins can change a diamond's roles or archive it"
+	}
+	return 0, ""
+}
+
 // matasPortfolioContextIssue finds the one issue that holds the portfolio context.
 func (h *Handler) matasPortfolioContextIssue(ctx context.Context, ws pgtype.UUID) (map[string]json.RawMessage, bool, error) {
 	rows, err := h.DB.Query(ctx, `SELECT metadata FROM issue WHERE workspace_id = $1 AND metadata @> '{"portfolio_context": true}'::jsonb ORDER BY created_at LIMIT 2`, ws)

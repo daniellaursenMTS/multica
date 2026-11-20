@@ -172,6 +172,12 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Value = value
 	}
+	if key == "dia_spec" {
+		if status, msg := h.matasDiamondGuard(r, issue); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+	}
 
 	// Enforce the key-count cap in the handler. The DB only guards size,
 	// and a clear 4xx for "too many keys" beats a CHECK violation that
@@ -240,6 +246,12 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	if matasContextGuarded(key) {
 		if _, status, msg := h.matasContextGuard(r, issue, key, nil); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+	}
+	if key == "dia_spec" {
+		if status, msg := h.matasDiamondGuard(r, issue); status != 0 {
 			writeError(w, status, msg)
 			return
 		}

@@ -164,6 +164,31 @@ func TestMatasProjectContext(t *testing.T) {
 		t.Fatalf("outsider delete: %d", got)
 	}
 
+	// Changing an existing diamond is for owners and admins only; creating one stays open.
+	newSpec, _ := json.Marshal(strings.Replace(string(spec), `"Bent"`, `"Otto"`, 1))
+	for _, tc := range []struct {
+		who     string
+		user    string
+		headers []string
+		want    int
+	}{
+		{"po", po, nil, 403}, {"outsider", outsider, nil, 403},
+		{"agent", testUserID, []string{"X-Actor-Source", "task_token", "X-Agent-ID", uuid.NewString()}, 403},
+		{"admin", admin, nil, 200},
+	} {
+		if got := set(tc.user, intake, "dia_spec", string(newSpec), tc.headers...); got != tc.want {
+			t.Errorf("change diamond as %s: %d, want %d", tc.who, got, tc.want)
+		}
+	}
+	if got := del(po, intake, "dia_spec"); got != 403 {
+		t.Errorf("po removed the diamond: %d", got)
+	}
+	freshProject := dbfx.Project(t, "Ny diamant "+tag)
+	fresh := dbfx.Issue(t, "Intake — ny", testutil.Cols{"status": "done", "project_id": freshProject, "number": counter(), "metadata": `{"pf_intake":true}`})
+	if got := set(outsider, fresh, "dia_spec", string(newSpec)); got != 200 {
+		t.Errorf("a member could not create a diamond: %d", got)
+	}
+
 	// The portfolio context: only owners and admins mark its issue and edit it.
 	portfolio := dbfx.Issue(t, "Porteføljekontekst", testutil.Cols{"status": "done", "number": counter()})
 	if got := set(po, portfolio, "portfolio_context", "true"); got != 403 {

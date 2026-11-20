@@ -6,11 +6,12 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { AppLink } from "@multica/views/navigation";
 import { ProjectDetail } from "@multica/views/projects/components";
 import { DiamondTab, OverviewTab, usePortfolio } from "../_portfolio/portfolio";
+import { ContextTab, contextAge, parseContext } from "../_portfolio/project-context";
 
-type View = "overview" | "kanban" | "diamond";
+type View = "overview" | "kanban" | "diamond" | "context";
 
-// A project page: Oversigt (data, tasks, history), Kanban (Multica's own project view) and Diamant.
-// ClickUp projects that are not moved yet only have Oversigt.
+// A project page: Oversigt (data, tasks, history), Kanban (Multica's own project view), Diamant and
+// Kontekst (the project context agents read). ClickUp projects that are not moved yet only have Oversigt.
 function ProjectPage({ id }: { id: string }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -24,6 +25,8 @@ function ProjectPage({ id }: { id: string }) {
   const tabs: [View, string][] = [["overview", "Oversigt"]];
   if (projectId) tabs.push(["kanban", "Kanban"]);
   if ((row?.hub || row?.dia_spec) && !row?.dia_archived) tabs.push(["diamond", "Diamant"]);
+  if (row?.multica_project) tabs.push(["context", "Kontekst"]);
+  const contextStale = contextAge(parseContext(row?.intake_meta?.ctx_spec)).stale;
   const asked = params.get("view") as View | null;
   const view: View = tabs.some(([k]) => k === asked) ? (asked as View) : row || loading ? "overview" : "kanban";
   const go = (v: View) => router.push(v === "overview" ? "?" : `?view=${v}`);
@@ -52,6 +55,7 @@ function ProjectPage({ id }: { id: string }) {
             <button key={k} type="button" aria-current={view === k ? "page" : undefined} onClick={() => go(k)}
               className={`border-b-2 pb-2 ${view === k ? "border-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
               {k === "diamond" && <span className="mr-1 text-[#CF022D]">◇</span>}{label}
+              {k === "context" && contextStale && <span className="ml-1 text-[#CF022D]" title="Ikke ændret i 30 dage">•</span>}
             </button>
           ))}
         </nav>
@@ -69,6 +73,7 @@ function ProjectPage({ id }: { id: string }) {
                 editing={editing} setEditing={setEditing} people={people} rows={rows} me={me} />
             )}
             {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} people={people} rows={rows} viewsKey={viewsKey} />}
+            {row && view === "context" && <ContextTab row={row} me={me} />}
           </div>
         </div>
       )}

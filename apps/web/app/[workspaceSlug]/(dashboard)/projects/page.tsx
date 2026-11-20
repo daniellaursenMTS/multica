@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ProjectsPage } from "@multica/views/projects/components";
 import { Diagram, matchesSearch, Overview, ProjectForm, usePortfolio, type ProjectSort } from "./_portfolio/portfolio";
+import { PortfolioContext } from "./_portfolio/project-context";
 
 // One list of projects: Multica projects grouped by status, with Portfolio fields and ◇ for a
 // diamond, then ClickUp intake that has not been moved yet. Multica's own list stays one click away.
@@ -15,6 +16,7 @@ function ProjectList() {
   const { pf, index, rows, me, isMine, error, loading } = usePortfolio();
   const [creating, setCreating] = useState(false);
   const [showClickup, setShowClickup] = useState(false);
+  const [showContext, setShowContext] = useState(false);
   const [search, setSearch] = useState("");
   const mine = params.get("filter") === "mine";
   const sort: ProjectSort = params.get("sort") === "activity" ? "activity" : params.get("sort") === "number" ? "number" : "status";
@@ -80,6 +82,17 @@ function ProjectList() {
         {!loading && (multica.length ? <Overview rows={multica} open={open} sort={sort} /> : (
           <p className="text-sm text-muted-foreground">{search.trim() ? `Ingen projekter matcher «${search.trim()}».` : mine ? "Du er ikke med i nogen projekter endnu." : "Ingen projekter endnu."}</p>
         ))}
+
+        <section className="flex flex-col gap-3 border-t pt-6" aria-labelledby="portfolio-context">
+          <h2 id="portfolio-context" className="text-sm font-medium">
+            <button type="button" onClick={() => setShowContext((v) => !v)} aria-expanded={showContext} aria-controls="portfolio-context-body"
+              className="flex items-center gap-2 hover:underline">
+              <span className="w-3 text-muted-foreground">{showContext ? "▾" : "▸"}</span>
+              Porteføljekontekst <span className="font-normal text-muted-foreground">· tværgående mål, prioriteter og ejer</span>
+            </button>
+          </h2>
+          {showContext && <div id="portfolio-context-body" className="pl-5"><PortfolioContext /></div>}
+        </section>
 
         {clickup.length > 0 && (
           <section className="flex flex-col gap-3 border-t pt-6" aria-labelledby="from-clickup">

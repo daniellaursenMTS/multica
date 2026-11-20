@@ -163,6 +163,15 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A project context is checked and normalised by the server; see matas_project_context.go.
+	if matasContextGuarded(key) {
+		value, status, msg := h.matasContextGuard(r, issue, key, req.Value)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		req.Value = value
+	}
 
 	// Enforce the key-count cap in the handler. The DB only guards size,
 	// and a clear 4xx for "too many keys" beats a CHECK violation that
@@ -228,6 +237,12 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
+	}
+	if matasContextGuarded(key) {
+		if _, status, msg := h.matasContextGuard(r, issue, key, nil); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
 	}
 
 	updated, err := h.Queries.DeleteIssueMetadataKey(r.Context(), db.DeleteIssueMetadataKeyParams{

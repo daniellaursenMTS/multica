@@ -13,6 +13,7 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { parseContext } from "./project-context";
 import {
   addProjectDocuments,
   DOCUMENT_ACCEPT,
@@ -1553,7 +1554,8 @@ export function usePortfolio() {
       const dia = typeof m.dia_spec === "string" && m.dia_spec !== m.dia_synced_spec && !m.dia_sync_error;
       const kh = typeof m.kh_share === "string" && m.kh_share !== m.kh_synced && !m.kh_sync_error;
       const drafting = typeof m.kh_draft_requested === "string" && m.kh_draft_requested !== m.kh_draft_for;
-      return dia || kh || drafting;
+      const ctx = !m.ctx_sync_error && (parseContext(m.ctx_spec)?.updated_at ?? null) !== (m.ctx_synced ?? null);
+      return dia || kh || drafting || ctx;
     }) ? 5000 : false),
   });
   // Newest activity first, so a few pages cover every project that has been worked on lately.

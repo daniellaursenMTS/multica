@@ -6254,3 +6254,36 @@ func TestCodexResumeOverflowErrorMatchesLiveFailureText(t *testing.T) {
 		t.Fatalf("predicate missed the error the backend actually produced: %q", result.Error)
 	}
 }
+
+// The daemon now hands every Codex task a managed config, `{"mcpServers":{}}`
+// when the agent has none (MATA-287). The per-task config.toml is seeded from
+// ~/.codex/config.toml, so a user server with credentials, inline or as a
+// sub-table, must be gone before codex starts.
+func TestEnsureCodexMcpConfigEmptyManagedSetStripsUserCredentials(t *testing.T) {
+	t.Parallel()
+
+	tmp := filepath.Join(t.TempDir(), "config.toml")
+	initial := "model = \"gpt-5\"\n\n" +
+		"[mcp_servers.user_hub]\n" +
+		"url = \"https://hub.example/mcp\"\n" +
+		"http_headers = { Authorization = \"Bearer inline-secret\" }\n\n" +
+		"[mcp_servers.user_stdio]\ncommand = \"npx\"\n\n" +
+		"[mcp_servers.user_stdio.env]\nTOKEN = \"table-secret\"\n\n" +
+		"[profiles.fast]\nmodel = \"gpt-5-mini\"\n"
+	if err := os.WriteFile(tmp, []byte(initial), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := ensureCodexMcpConfig(tmp, json.RawMessage(`{"mcpServers":{}}`), slog.Default()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	data, _ := os.ReadFile(tmp)
+	got := string(data)
+	for _, leaked := range []string{"user_hub", "user_stdio", "hub.example", "inline-secret", "table-secret"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("user MCP entry %q survived the managed empty set:\n%s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "[profiles.fast]") || !strings.Contains(got, `model = "gpt-5"`) {
+		t.Fatalf("unrelated config must survive, got:\n%s", got)
+	}
+}

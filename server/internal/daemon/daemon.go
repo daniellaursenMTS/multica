@@ -7510,15 +7510,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if task.Agent != nil {
 		agentMcpConfig = task.Agent.McpConfig
-		effectiveMcpConfig = agentMcpConfig
-		if merged, mergeErr := mergeRuntimeAndAgentMcpConfig(provider, agentMcpConfig); mergeErr != nil {
-			taskLog.Warn("mcp_config: runtime merge failed; using agent configuration only",
-				"provider", provider,
-				"error", mergeErr,
-			)
-		} else {
-			effectiveMcpConfig = merged
-		}
+	}
+	effectiveMcpConfig = resolveTaskMcpConfig(provider, agentMcpConfig, os.Getenv(runtimeMcpAllowEnv), taskLog)
+	if task.Agent != nil {
 		if len(remoteMCPConfig) > 0 {
 			merged, mergeErr := mergeTaskRemoteMCPConfig(effectiveMcpConfig, remoteMCPConfig)
 			if mergeErr != nil {
@@ -8215,10 +8209,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// the ones that do — so a wrapper's subcommand was either dropped on the
 	// floor or spliced in behind `-p` (GH #7046).
 	extraArgs := defaultArgsForProvider(d.cfg, provider)
-	var mcpConfig json.RawMessage
+	// Set even without an agent so strict providers never fall back to the
+	// runtime user's own MCP servers.
+	mcpConfig := effectiveMcpConfig
 	if task.Agent != nil {
 		customArgs = task.Agent.CustomArgs
-		mcpConfig = effectiveMcpConfig
 	}
 	if hermesOverlayActive {
 		// Stripped above, alongside the launch prefix. A skill-less hermes task

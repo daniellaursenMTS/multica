@@ -274,6 +274,7 @@ Daemon behavior is configured via flags or environment variables:
 | GC Hermes memory TTL (per-agent `memories/`) | — | `MULTICA_GC_HERMES_MEMORY_TTL` | `2160h` (90d; set `0` to disable) |
 | GC Hermes session TTL (per-conversation `state.db`) | — | `MULTICA_GC_HERMES_SESSION_TTL` | `336h` (14d; set `0` to disable) |
 | GC task temp legacy TTL (pre-lock `multica-task-*`) | — | `MULTICA_GC_TASK_TEMP_LEGACY_TTL` | `0` (disabled; set a duration to opt in) |
+| Runtime MCP servers passed to agents | — | `MULTICA_RUNTIME_MCP_ALLOW` | empty (none; see [Runtime MCP servers](#runtime-mcp-servers-from-your-own-cli-configuration)) |
 
 #### Workspace garbage collection
 
@@ -360,6 +361,27 @@ If a previously generated `~/.multica/hooks` wrapper is first on `PATH` and call
 
 The daemon launches Qoder and Qoder CN as `qodercli --yolo --acp` and `qoderclicn --yolo --acp`, respectively, matching their ACP “bypass permissions” mode so tool runs do not block on interactive approval in headless runs.
 The daemon launches Qwen Code as `qwen -p <prompt> --output-format stream-json`. It writes the task brief to `QWEN.md`; when an agent has managed `mcp_config`, the daemon writes a 0600 per-run JSON file and passes it through `--mcp-config <path>`, then removes it after the process exits. A null config preserves Qwen Code native MCP settings.
+
+#### Runtime MCP servers from your own CLI configuration
+
+Agents get the MCP servers Multica manages (the agent's `mcp_config`, workspace bindings, Remote MCP) and nothing from the daemon user's own CLI configuration, unless you opt a server in by name:
+
+```bash
+MULTICA_RUNTIME_MCP_ALLOW=docs,fetch multica daemon start
+```
+
+Servers in `~/.claude.json`, `~/.codex/config.toml` and the like usually carry your personal credentials, and an agent is not you. With the variable unset no runtime server is passed on. A listed server is merged into the task-local config (the agent's own entry wins on a name collision), and the daemon logs its name, never its URL, headers or env values.
+
+How far this holds depends on the runtime:
+
+| Runtime | User, local and project-scope servers |
+|---|---|
+| Claude Code | Locked. Every task launches with `--strict-mcp-config` and a task-local `--mcp-config`, empty when the agent has no `mcp_config`, so `~/.claude.json` (user and `--scope local`) and a repository's `.mcp.json` are ignored. Plugin servers are passed only when allowed by name. |
+| Codex | Locked. The task's `CODEX_HOME/config.toml` is seeded from `~/.codex/config.toml`; every inherited `[mcp_servers.*]` table is stripped and replaced by the managed block, and `-c mcp_servers.*` overrides in `custom_args` are dropped. |
+| Cursor, OpenClaw, OpenCode, CodeArts | Runtime servers are no longer merged into an agent's `mcp_config` unless allowed. Without an `mcp_config` these CLIs still load their own configuration natively; OpenCode and CodeArts also merge it with a managed config. Not locked. |
+| CodeBuddy, Kimi, Qwen Code, ACP runtimes (Hermes, Kiro, Grok, …), omp | The daemon never read their configuration; the CLIs load their own user configuration natively. Not locked. |
+
+On a runtime that is not locked, keep personal servers out of the daemon user's global CLI configuration, or run the daemon as a separate OS user.
 
 #### `mcp_config` on ACP runtimes
 

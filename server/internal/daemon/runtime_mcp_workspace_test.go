@@ -23,7 +23,9 @@ func effectiveServerNames(t *testing.T, provider string, bound []handler.Workspa
 	if err != nil {
 		t.Fatalf("ResolveAgentMcpConfig: %v", err)
 	}
-	merged, err := mergeRuntimeAndAgentMcpConfig(provider, resolved)
+	// runtime-local is the only server in the fake runtime configuration;
+	// allowing it keeps these tests about the resolver/merge contract.
+	merged, _, err := mergeRuntimeAndAgentMcpConfig(provider, resolved, parseRuntimeMcpAllowList("runtime-local"))
 	if err != nil {
 		t.Fatalf("mergeRuntimeAndAgentMcpConfig: %v", err)
 	}

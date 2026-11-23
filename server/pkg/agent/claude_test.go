@@ -349,6 +349,18 @@ func TestBuildClaudeArgsUsesStrictMCPForManagedConfig(t *testing.T) {
 	}
 }
 
+// The daemon now hands every Claude task a managed config, `{"mcpServers":{}}`
+// when the agent has none (MATA-287), so user, local and project-scope servers
+// are never inherited.
+func TestBuildClaudeArgsUsesStrictMCPForDaemonEmptySet(t *testing.T) {
+	t.Parallel()
+
+	args := buildClaudeArgs(ExecOptions{McpConfig: json.RawMessage(`{"mcpServers":{}}`)}, slog.Default())
+	if !slices.Contains(args, "--strict-mcp-config") {
+		t.Fatalf("daemon's empty managed set must enable strict mode, got %v", args)
+	}
+}
+
 // Claude Code reads the per-task CLAUDE.md the daemon writes into the workdir,
 // so the daemon never populates SystemPrompt for it (see
 // providerNeedsInlineSystemPrompt). Forwarding it as --append-system-prompt

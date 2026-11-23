@@ -41,7 +41,7 @@ func matasMCPTools() []any {
 	ro := map[string]any{"readOnlyHint": true, "openWorldHint": false}
 	rw := map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 	return append([]any{
-		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: project number (Capex number and a sequence, e.g. 1004-2; only projects with a Capex have one), status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
+		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: project number (Capex number and a sequence, e.g. 1004-2; only projects with a Capex have one), status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, stakeholders outside the diamond with their titles, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_list_agents", "description": "List the agents a task can be given to, with what each does.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_project_summary", "description": "Get what a project's owners chose to share: their approved summary, or a note that the whole project hub is shared (then use multica_ask_project) or that nothing is shared.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID or project number (e.g. 1004-2) from multica_list_projects.")}), "annotations": ro},
 		map[string]any{"name": "multica_ask_project", "description": "Ask the Knowledge Hub agent a question. It answers from Matas' own sources and from projects only as far as their owners share them. Asynchronous: poll multica_get_issue with the returned id; the answer appears there as `answer` within a few minutes.", "inputSchema": obj([]string{"request_id", "question"}, map[string]any{"request_id": str("Stable UUID for this question; reuse it to retry."), "question": str("The question, 1–4000 characters."), "project_id": str("Optional project the question is about: its UUID or its project number, e.g. 1004-2.")}), "annotations": rw},
@@ -148,12 +148,17 @@ func (h *Handler) mcpListProjects(r *http.Request, raw json.RawMessage) (any, er
 			}
 			item["fields"] = fields
 			var spec struct {
-				Name     string                     `json:"name"`
-				Archived bool                       `json:"archived"`
-				Roles    map[string]json.RawMessage `json:"roles"`
+				Name         string                     `json:"name"`
+				Archived     bool                       `json:"archived"`
+				Roles        map[string]json.RawMessage `json:"roles"`
+				Stakeholders json.RawMessage            `json:"stakeholders"`
 			}
 			if s := metaString(m, "dia_spec"); s != "" && json.Unmarshal([]byte(s), &spec) == nil && !spec.Archived {
 				diamond := map[string]any{"name_in_updates": spec.Name, "roles": spec.Roles}
+				// People in the project outside the diamond, with the title the owner gave them.
+				if len(spec.Stakeholders) > 0 && string(spec.Stakeholders) != "null" {
+					diamond["stakeholders"] = spec.Stakeholders
+				}
 				if st := metaString(m, "dia_status"); st != "" {
 					diamond["activity"] = json.RawMessage(st)
 				}

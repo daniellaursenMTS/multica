@@ -7,14 +7,16 @@ import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { AppLink } from "@multica/views/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ROLE_NAME, usePortfolio, type DiaSpec, type RoleCode, type Row } from "../projects/_portfolio/portfolio";
+import { ROLE_NAME, renameInSpec, usePortfolio, type DiaSpec, type RoleCode, type Row } from "../projects/_portfolio/portfolio";
 
-// Team (admins only): everyone who holds a role in a diamond, the projects and roles they hold,
-// and the login they are linked to. Renaming writes the new name into every diamond the person is
-// in; the diamond sync then updates roster.json, the hubs' role tables and ROSTER.md.
+// Team (admins only): everyone who holds a role in a diamond or stands beside one as a stakeholder,
+// the projects and roles they hold, and the login they are linked to. Renaming writes the new name
+// into every diamond the person is in, roles and stakeholders alike; the diamond sync then updates
+// roster.json, the hubs' role tables and ROSTER.md.
 
 const ROLES: RoleCode[] = ["bo", "po", "plo", "to"];
-interface Seat { row: Row; role: RoleCode; confirmed: boolean }
+/** A role in a diamond, or "stakeholder" beside it (with the title the owner gave). */
+interface Seat { row: Row; role: RoleCode | "stakeholder"; confirmed: boolean; title?: string }
 interface Person { name: string; seats: Seat[]; email: string | null; demoOnly: boolean }
 
 function similar(name: string, others: string[]) {
@@ -33,19 +35,12 @@ function Rename({ person, people, onDone }: { person: Person; people: string[]; 
   const merge = next !== person.name && people.includes(next);
   const save = useMutation({
     mutationFn: async () => {
-      // One write per diamond the person is in: same spec, the name swapped in each of their roles.
+      // One write per diamond the person is in, roles and stakeholders alike.
       const byRow = new Map<string, Row>();
       person.seats.forEach((s) => byRow.set(s.row.id, s.row));
       for (const row of byRow.values()) {
         if (!row.intake_issue || !row.dia_spec) continue;
-        const spec: DiaSpec = JSON.parse(JSON.stringify(row.dia_spec));
-        ROLES.forEach((r) => {
-          const v = spec.roles[r];
-          if (v?.person === person.name) {
-            v.person = next;
-            if (person.email) { (v as Record<string, unknown>).email = person.email; (v as Record<string, unknown>).rename_from = person.name; }
-          }
-        });
+        const spec = renameInSpec(row.dia_spec, person.name, next, person.email);
         await api.setIssueMetadataKey(row.intake_issue, "dia_spec", JSON.stringify(spec));
       }
     },
@@ -79,7 +74,9 @@ function EmailEdit({ person, taken, onDone }: { person: Person; taken: Map<strin
   const holder = next ? taken.get(next) : undefined;
   const problem = next && !EMAIL_RE.test(next) ? "Det ligner ikke en email-adresse."
     : holder && holder !== person.name ? `Den er allerede koblet til ${holder}.` : null;
-  const seat = person.seats.find((s) => !s.row.demo && s.row.intake_issue && s.row.dia_spec) ?? person.seats.find((s) => s.row.intake_issue && s.row.dia_spec);
+  // A login belongs to a role; stakeholders get none.
+  const roleSeats = person.seats.filter((s): s is Seat & { role: RoleCode } => s.role !== "stakeholder");
+  const seat = roleSeats.find((s) => !s.row.demo && s.row.intake_issue && s.row.dia_spec) ?? roleSeats.find((s) => s.row.intake_issue && s.row.dia_spec);
   const save = useMutation({
     mutationFn: async () => {
       if (!seat?.row.intake_issue || !seat.row.dia_spec) throw new Error("Personen er ikke i en diamant, der kan rettes.");
@@ -134,6 +131,12 @@ export default function TeamPage() {
         if (!row.demo) p0.demoOnly = false;
         map.set(v.person, p0);
       });
+      row.dia_spec?.stakeholders?.forEach((x) => {
+        const p0 = map.get(x.name) ?? { name: x.name, seats: [], email: emailOf.get(x.name) ?? null, demoOnly: true };
+        p0.seats.push({ row, role: "stakeholder", confirmed: true, title: x.title });
+        if (!row.demo) p0.demoOnly = false;
+        map.set(x.name, p0);
+      });
     });
     return Array.from(map.values()).sort((a, b) => Number(a.demoOnly) - Number(b.demoOnly) || a.name.localeCompare(b.name, "da"));
   }, [rows, index]);
@@ -151,7 +154,8 @@ export default function TeamPage() {
           <AppLink href={p.projects()} className="self-start text-sm text-muted-foreground hover:text-foreground">← Projekter</AppLink>
           <h1 className="text-lg font-semibold">Team</h1>
           <p className="text-sm text-muted-foreground">
-            Alle med en rolle i en diamant. Et nyt navn skrives i alle personens diamanter og følger med til hub, status og projekt-chat inden for et minut.
+            Alle med en rolle i en diamant eller som stakeholder ved siden af den. Et nyt navn skrives i alle personens diamanter, både roller og stakeholders,
+            og følger med til hub, status og projekt-chat inden for et minut.
             {pending && " Synkroniserer ændringer …"}
           </p>
         </header>
@@ -181,7 +185,8 @@ export default function TeamPage() {
                         {person.seats.map((s) => (
                           <li key={s.row.id + s.role}>
                             <AppLink href={`${p.projectDetail(s.row.id)}?view=diamond`} className="font-medium hover:underline">{s.row.name}</AppLink>
-                            <span className="text-muted-foreground"> · {ROLE_NAME[s.role]}{s.confirmed ? "" : " (skal bekræftes)"}</span>
+                            <span className="text-muted-foreground"> · {s.role === "stakeholder"
+                              ? `Stakeholder${s.title ? ` (${s.title})` : ""}` : `${ROLE_NAME[s.role]}${s.confirmed ? "" : " (skal bekræftes)"}`}</span>
                           </li>
                         ))}
                       </ul>
@@ -192,9 +197,9 @@ export default function TeamPage() {
                       ) : (
                         <div className="flex flex-wrap items-center gap-2">
                           <span>{person.email ?? "—"}</span>
-                          <button type="button" onClick={() => setEditingEmail(person.name)} className="rounded-md border px-2 py-0.5 text-xs text-foreground hover:bg-accent">
+                          {person.seats.some((s) => s.role !== "stakeholder") && <button type="button" onClick={() => setEditingEmail(person.name)} className="rounded-md border px-2 py-0.5 text-xs text-foreground hover:bg-accent">
                             {person.email ? "Ret" : "Tilføj"}
-                          </button>
+                          </button>}
                         </div>
                       )}
                     </td>

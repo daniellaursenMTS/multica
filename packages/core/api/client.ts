@@ -3590,6 +3590,11 @@ export class ApiClient {
     return this.fetch(`/api/projects/${id}/decision-log/confirm`, { method: "POST", body: JSON.stringify(body) });
   }
 
+  /** Matas: a draft of a project's context (id "portfolio" for the portfolio's), with a source per value. Nothing is saved. */
+  async getProjectContextDraft(id: string): Promise<unknown> {
+    return this.fetch(`/api/projects/${id}/context-draft`);
+  }
+
   async createProject(data: CreateProjectRequest): Promise<Project> {
     return this.fetch("/api/projects", {
       method: "POST",

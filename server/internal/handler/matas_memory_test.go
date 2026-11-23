@@ -78,7 +78,7 @@ func TestMatasBuildDecisionLog(t *testing.T) {
 }
 
 func TestMatasMemoryReadable(t *testing.T) {
-	spec := `{"roles":{"po":{"person":"Petra","email":"Petra@Matas.dk"},"bo":{"person":"Bent"}}}`
+	spec := `{"roles":{"po":{"person":"Petra","email":"Petra@Matas.dk"},"bo":{"person":"Bent"}},"project_lead":{"person":"Lis","email":"lis@matas.dk"}}`
 	meta := func(kv ...string) map[string]json.RawMessage {
 		m := map[string]json.RawMessage{"dia_spec": json.RawMessage(mustJSON(spec))}
 		for i := 0; i+1 < len(kv); i += 2 {
@@ -91,17 +91,24 @@ func TestMatasMemoryReadable(t *testing.T) {
 		name  string
 		m     map[string]json.RawMessage
 		email string
+		role  string
 		want  bool
 	}{
-		{"owner by role e-mail", meta(), "petra@matas.dk", true},
-		{"owner by roster link", meta("ctx_editors", `{"bo":["bent@matas.dk"]}`), "bent@matas.dk", true},
-		{"outsider", meta(), "otto@matas.dk", false},
-		{"outsider, whole project shared", meta("kh_share", full, "kh_synced", full), "otto@matas.dk", true},
-		{"outsider, share not applied yet", meta("kh_share", full), "otto@matas.dk", false},
-		{"outsider, summary only", meta("kh_share", summary, "kh_synced", summary), "otto@matas.dk", false},
-		{"archived diamond", map[string]json.RawMessage{"dia_spec": json.RawMessage(mustJSON(`{"archived":true,"roles":{"po":{"person":"Petra","email":"petra@matas.dk"}}}`))}, "petra@matas.dk", false},
+		{"owner by role e-mail", meta(), "petra@matas.dk", "member", true},
+		{"owner by roster link", meta("ctx_editors", `{"bo":["bent@matas.dk"]}`), "bent@matas.dk", "member", true},
+		{"project lead by e-mail", meta(), "lis@matas.dk", "member", true},
+		{"project lead by roster link", meta("ctx_editors", `{"pl":["lis.h@matas.dk"]}`), "lis.h@matas.dk", "member", true},
+		{"outsider", meta(), "otto@matas.dk", "member", false},
+		{"admin without a role sees everything", meta(), "otto@matas.dk", "admin", true},
+		{"owner without a role sees everything", meta(), "otto@matas.dk", "owner", true},
+		{"outsider, whole project shared", meta("kh_share", full, "kh_synced", full), "otto@matas.dk", "member", true},
+		{"outsider, share not applied yet", meta("kh_share", full), "otto@matas.dk", "member", false},
+		{"outsider, summary only", meta("kh_share", summary, "kh_synced", summary), "otto@matas.dk", "member", false},
+		{"viewer named in the diamond reads only what is shared", meta(), "petra@matas.dk", "viewer", false},
+		{"viewer, whole project shared", meta("kh_share", full, "kh_synced", full), "vera@matas.dk", "viewer", true},
+		{"archived diamond", map[string]json.RawMessage{"dia_spec": json.RawMessage(mustJSON(`{"archived":true,"roles":{"po":{"person":"Petra","email":"petra@matas.dk"}}}`))}, "petra@matas.dk", "member", false},
 	} {
-		if got := matasMemoryReadable(tc.m, tc.email); got != tc.want {
+		if got := matasMemoryReadable(tc.m, tc.email, tc.role); got != tc.want {
 			t.Errorf("%s: %v", tc.name, got)
 		}
 	}

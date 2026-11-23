@@ -52,6 +52,7 @@ import type {
   Workspace,
   WorkspaceRepo,
   WorkspaceMcpServer,
+  Member,
   MemberWithUser,
   User,
   Skill,
@@ -2925,6 +2926,11 @@ export class ApiClient {
   }
 
   // Members
+  /** The caller's own membership; the one member route a viewer may call (MATA-286). */
+  async getMyMembership(workspaceId: string): Promise<Member> {
+    return this.fetch(`/api/workspaces/${workspaceId}/membership`);
+  }
+
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/members`);
   }

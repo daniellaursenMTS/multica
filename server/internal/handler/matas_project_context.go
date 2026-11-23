@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -243,22 +245,56 @@ func matasNormalizeContext(raw string, portfolio bool, by string, now time.Time)
 	return out, nil
 }
 
-// matasContextEditorEmails are the e-mails that may edit a project's context: those on a role in
-// dia_spec and those the roster links to a role (ctx_editors, written by the sync). An archived
-// diamond has no editors.
+// matasLeadRole is the project lead (MATA-286): dia_spec.project_lead, one primary per project,
+// who owns the project and keeps it and its diamond current. It is not a diamond role and owns no
+// area; ctx_editors carries the e-mails the roster links to it under this key.
+const matasLeadRole = "pl"
+
+// matasPerson is a role or the project lead in dia_spec.
+type matasPerson struct {
+	Person string `json:"person"`
+	Email  string `json:"email"`
+}
+
+// matasSpecPeople is the part of dia_spec the server's checks read.
+type matasSpecPeople struct {
+	Archived    bool                   `json:"archived"`
+	Roles       map[string]matasPerson `json:"roles"`
+	ProjectLead *matasPerson           `json:"project_lead"`
+}
+
+// matasSpecOf reads dia_spec from intake metadata; ok is false without one.
+func matasSpecOf(m map[string]json.RawMessage) (matasSpecPeople, bool) {
+	var spec matasSpecPeople
+	s := metaString(m, "dia_spec")
+	return spec, s != "" && json.Unmarshal([]byte(s), &spec) == nil
+}
+
+// lead is the project lead with a name, or nil.
+func (s matasSpecPeople) lead() *matasPerson {
+	if s.ProjectLead == nil || strings.TrimSpace(s.ProjectLead.Person) == "" {
+		return nil
+	}
+	return s.ProjectLead
+}
+
+// matasContextEditorEmails are the e-mails that may edit a project's context: those on a role or
+// the project lead in dia_spec and those the roster links to them (ctx_editors, written by the
+// sync). An archived diamond has no editors.
 func matasContextEditorEmails(m map[string]json.RawMessage) map[string]bool {
 	out := map[string]bool{}
-	var spec struct {
-		Archived bool `json:"archived"`
-		Roles    map[string]struct {
-			Person string `json:"person"`
-			Email  string `json:"email"`
-		} `json:"roles"`
-	}
-	if s := metaString(m, "dia_spec"); s == "" || json.Unmarshal([]byte(s), &spec) != nil || spec.Archived {
+	spec, ok := matasSpecOf(m)
+	if !ok || spec.Archived {
 		return out
 	}
+	people := []matasPerson{}
 	for _, r := range spec.Roles {
+		people = append(people, r)
+	}
+	if l := spec.lead(); l != nil {
+		people = append(people, *l)
+	}
+	for _, r := range people {
 		if e := strings.ToLower(strings.TrimSpace(r.Email)); e != "" && strings.TrimSpace(r.Person) != "" {
 			out[e] = true
 		}
@@ -267,6 +303,32 @@ func matasContextEditorEmails(m map[string]json.RawMessage) map[string]bool {
 		for _, e := range emails {
 			out[e] = true
 		}
+	}
+	return out
+}
+
+// matasRoleEmails are the e-mails linked to one role of a live diamond, or to its project lead
+// (matasLeadRole): the one in dia_spec and the roster's (ctx_editors).
+func matasRoleEmails(m map[string]json.RawMessage, role string) map[string]bool {
+	out := map[string]bool{}
+	spec, ok := matasSpecOf(m)
+	if !ok || spec.Archived {
+		return out
+	}
+	p, has := spec.Roles[role]
+	if role == matasLeadRole {
+		if l := spec.lead(); l != nil {
+			p, has = *l, true
+		}
+	}
+	if !has || strings.TrimSpace(p.Person) == "" {
+		return out
+	}
+	if e := strings.ToLower(strings.TrimSpace(p.Email)); e != "" {
+		out[e] = true
+	}
+	for _, e := range matasContextEditorsByRole(m)[role] {
+		out[e] = true
 	}
 	return out
 }
@@ -327,8 +389,8 @@ func (h *Handler) matasContextGuard(r *http.Request, issue db.Issue, key string,
 	case admin:
 	case portfolio:
 		return nil, http.StatusForbidden, "only workspace owners and admins can edit the portfolio context"
-	case !matasContextEditorEmails(m)[email]:
-		return nil, http.StatusForbidden, "only the project's diamond owners and workspace admins can edit its context"
+	case middleware.IsViewer(member.Role) || !matasContextEditorEmails(m)[email]:
+		return nil, http.StatusForbidden, "only the project's diamond owners, its project lead and workspace admins can edit its context"
 	}
 	if value == nil {
 		return nil, 0, "" // a delete
@@ -350,25 +412,77 @@ func matasContextGuarded(key string) bool {
 	return key == matasContextKey || key == matasContextEditorsKey || key == matasPortfolioContextMark
 }
 
-// matasDiamondGuard: changing a diamond that exists — its roles, logins, archiving or restoring
-// it — is for workspace owners and admins only. Creating one where there is none stays open, so
-// a member's «Opret diamant» and Mrs.Intake's new_project.py keep working. status is 0 when the
-// write may go ahead.
-func (h *Handler) matasDiamondGuard(r *http.Request, issue db.Issue) (int, string) {
+// matasDiamondGuard checks a write to dia_spec (value nil for a delete). A diamond that exists —
+// its roles, stakeholders, logins, archiving or restoring it — is changed by workspace owners and
+// admins and by the project's own project lead (MATA-286); its Product Owner may change only the
+// stakeholders. Only owners and admins appoint, change or remove the project lead, and only they
+// delete dia_spec. Creating a diamond where there is none stays open, so a member's «Opret
+// diamant» and Mrs.Intake's new_project.py keep working, as long as it names no project lead.
+// status is 0 when the write may go ahead.
+func (h *Handler) matasDiamondGuard(r *http.Request, issue db.Issue, value json.RawMessage) (int, string) {
 	m := map[string]json.RawMessage{}
 	_ = json.Unmarshal(issue.Metadata, &m)
-	if _, exists := m["dia_spec"]; !exists {
+	_, exists := m["dia_spec"]
+	next := map[string]json.RawMessage{}
+	if value != nil {
+		next["dia_spec"] = value
+	}
+	oldSpec, _ := matasSpecOf(m)
+	newSpec, _ := matasSpecOf(next)
+	leadChanged := value != nil && !matasSameLead(oldSpec.lead(), newSpec.lead())
+	if !exists && !leadChanged {
 		return 0, ""
 	}
 	ws := uuidToString(issue.WorkspaceID)
 	if actorType, _ := h.resolveActor(r, requestUserID(r), ws); actorType != "member" {
-		return http.StatusForbidden, "agents cannot change a diamond; a workspace admin changes roles on the project page"
+		return http.StatusForbidden, "agents cannot change a diamond or its project lead; a workspace admin or the project lead changes it on the project page"
 	}
 	member, err := h.getWorkspaceMember(r.Context(), requestUserID(r), ws)
-	if err != nil || !roleAllowed(member.Role, "owner", "admin") {
-		return http.StatusForbidden, "only workspace owners and admins can change a diamond's roles or archive it"
+	if err != nil {
+		return http.StatusForbidden, "only workspace members can change a diamond"
 	}
-	return 0, ""
+	if roleAllowed(member.Role, "owner", "admin") {
+		return 0, ""
+	}
+	switch {
+	case leadChanged:
+		return http.StatusForbidden, "only workspace owners and admins appoint, change or remove a project's project lead"
+	case value == nil:
+		return http.StatusForbidden, "only workspace owners and admins can remove a diamond"
+	}
+	user, err := h.Queries.GetUser(r.Context(), member.UserID)
+	if err != nil {
+		return http.StatusForbidden, "could not read your account"
+	}
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	switch {
+	case email == "" || middleware.IsViewer(member.Role):
+	case matasRoleEmails(m, matasLeadRole)[email]:
+		return 0, ""
+	case matasRoleEmails(m, "po")[email] && matasOnlyStakeholders(metaString(m, "dia_spec"), metaString(next, "dia_spec")):
+		return 0, ""
+	}
+	return http.StatusForbidden, "only workspace admins and the project's project lead change a diamond's roles or archive it; its Product Owner may change the stakeholders"
+}
+
+// matasSameLead is whether two project leads are the same person with the same e-mail.
+func matasSameLead(a, b *matasPerson) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return strings.TrimSpace(a.Person) == strings.TrimSpace(b.Person) &&
+		strings.EqualFold(strings.TrimSpace(a.Email), strings.TrimSpace(b.Email))
+}
+
+// matasOnlyStakeholders is whether two dia_spec values differ in nothing but their stakeholders.
+func matasOnlyStakeholders(before, after string) bool {
+	var a, b map[string]any
+	if json.Unmarshal([]byte(before), &a) != nil || json.Unmarshal([]byte(after), &b) != nil {
+		return false
+	}
+	delete(a, "stakeholders")
+	delete(b, "stakeholders")
+	return reflect.DeepEqual(a, b)
 }
 
 // matasPortfolioContextIssue finds the one issue that holds the portfolio context.
@@ -449,13 +563,40 @@ func (h *Handler) mcpProjectContext(r *http.Request, raw json.RawMessage) (any, 
 		out["project"].(map[string]any)["number"] = n
 	}
 	var spec struct {
-		Archived bool                       `json:"archived"`
-		Roles    map[string]json.RawMessage `json:"roles"`
+		Archived    bool            `json:"archived"`
+		Roles       json.RawMessage `json:"roles"`
+		ProjectLead json.RawMessage `json:"project_lead"`
 	}
+	viewer := h.matasViewer(r)
 	if s := metaString(m, "dia_spec"); s != "" && json.Unmarshal([]byte(s), &spec) == nil && !spec.Archived {
+		if viewer {
+			spec.Roles, spec.ProjectLead = matasWithoutEmails(spec.Roles), matasWithoutEmails(spec.ProjectLead)
+		}
 		out["diamond"] = spec.Roles
+		if l, ok := matasSpecOf(m); ok && l.lead() != nil {
+			out["project_lead"] = spec.ProjectLead
+		}
+	}
+	// A reader (MATA-286) gets only what the owners shared: the whole context when they shared the
+	// whole project, their approved summary when they shared that, else who to ask. Decision rights,
+	// sources and what to watch for stay with the project's own people.
+	if viewer {
+		switch mode := matasSharedMode(m); mode {
+		case "full":
+		case "summary":
+			out["shared"], out["summary"] = mode, metaString(m, "kh_summary")
+			out["note"] = "The owners shared only this summary with readers; the project context is not shared."
+			return out, nil
+		default:
+			out["shared"] = "none"
+			out["note"] = "The owners have not shared this project. Name it and ask " + matasMemoryAsk(m) + "; do not guess at its context."
+			return out, nil
+		}
 	}
 	if view, ok := matasContextView(m, now); ok {
+		if viewer {
+			view["context"] = matasWithoutUpdatedBy(view["context"].(json.RawMessage))
+		}
 		for k, v := range view {
 			out[k] = v
 		}
@@ -463,6 +604,33 @@ func (h *Handler) mcpProjectContext(r *http.Request, raw json.RawMessage) (any, 
 		out["note"] = "The project's owners have not written a project context yet."
 	}
 	return out, nil
+}
+
+// matasSharedMode is what the owners share with Knowledge Hub once the sync has applied it: full,
+// summary or none.
+func matasSharedMode(m map[string]json.RawMessage) string {
+	share := metaString(m, "kh_share")
+	var ks struct {
+		Mode string `json:"mode"`
+	}
+	if share == "" || share != metaString(m, "kh_synced") || json.Unmarshal([]byte(share), &ks) != nil || (ks.Mode != "full" && ks.Mode != "summary") {
+		return "none"
+	}
+	return ks.Mode
+}
+
+// matasWithoutUpdatedBy drops the editor's e-mail from a context shown to a reader.
+func matasWithoutUpdatedBy(raw json.RawMessage) json.RawMessage {
+	var c map[string]any
+	if json.Unmarshal(raw, &c) != nil {
+		return raw
+	}
+	delete(c, "updated_by")
+	out, err := json.Marshal(c)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // mcpProposeProjectContext files a proposed change to a project's context as a task in review for

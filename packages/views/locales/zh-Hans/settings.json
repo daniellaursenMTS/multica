@@ -1292,6 +1292,10 @@
       "member": {
         "label": "成员",
         "description": "创建并处理任务"
+      },
+      "viewer": {
+        "label": "读者",
+        "description": "通过门户和 MCP 阅读共享的项目知识；无法访问 Multica 本身"
       }
     },
     "share_links_title": "分享链接",

@@ -1299,6 +1299,10 @@
       "member": {
         "label": "Member",
         "description": "Create and work on issues"
+      },
+      "viewer": {
+        "label": "Reader",
+        "description": "Reads shared project knowledge in the portal and through MCP; no access to Multica itself"
       }
     },
     "share_links_title": "Share links",

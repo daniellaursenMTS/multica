@@ -4,7 +4,7 @@ import { use, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, usePathname } from "next/navigation";
 import { WorkspaceSlugProvider, paths } from "@multica/core/paths";
-import { workspaceBySlugOptions } from "@multica/core/workspace";
+import { myMembershipOptions, workspaceBySlugOptions } from "@multica/core/workspace";
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
 import { NoAccessPage } from "@multica/views/workspace/no-access-page";
@@ -12,6 +12,7 @@ import { WelcomeAfterOnboarding } from "@multica/views/workspace/welcome-after-o
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
 import { workspaceSlugFromPathname } from "@/lib/workspace-slug-from-pathname";
+import { ViewerPage } from "./viewer-page";
 
 export default function WorkspaceLayout({
   children,
@@ -52,6 +53,14 @@ export default function WorkspaceLayout({
   const { data: workspace } = useQuery({
     ...workspaceBySlugOptions(workspaceSlug),
     enabled: !!user,
+  });
+
+  // A reader (workspace role viewer, MATA-286) gets a page pointing to the portal instead of
+  // Multica; the server refuses them everything else anyway. If the role cannot be read, the
+  // server's refusals still hold, so the page falls through to the normal app.
+  const { data: membership, isPending: membershipPending, isError: membershipError } = useQuery({
+    ...myMembershipOptions(workspace?.id ?? ""),
+    enabled: !!workspace?.id,
   });
 
   // Render-phase sync: feed the URL slug into the platform singleton so
@@ -119,6 +128,9 @@ export default function WorkspaceLayout({
     // distinguish 404 vs 403 to avoid letting attackers enumerate slugs.
     return <NoAccessPage />;
   }
+
+  if (membershipPending && !membershipError) return loadingIndicator;
+  if (membership?.role === "viewer") return <ViewerPage workspaceName={workspace.name} />;
 
   return (
     <WorkspaceSlugProvider slug={workspaceSlug}>

@@ -13,7 +13,7 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import { AppLink } from "@multica/views/navigation";
 import { estimateCost } from "@multica/views/runtimes";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { parseContext, useIsAdmin } from "./project-context";
+import { diamondAccess, parseContext, useIsAdmin } from "./project-context";
 import {
   addProjectDocuments,
   DOCUMENT_ACCEPT,
@@ -62,7 +62,7 @@ export interface Portfolio { synced_at: string | null; as_of: string; rows: Row[
 export interface Index {
   as_of: string;
   accounts: Record<string, string>;
-  people: { name: string; slug: string; roles: { project: string; role: RoleCode }[] }[];
+  people: { name: string; slug: string; roles: { project: string; role: RoleCode | "pl" }[] }[]; // pl: the project lead
 }
 
 export const PROJECT_CHAT_AGENT_NAME = "Projekt-chat";
@@ -787,7 +787,11 @@ export interface DiaSpec {
   slug: string; name: string; aliases: string[]; archived?: boolean;
   roles: Record<RoleCode, { person: string | null; confirmed?: boolean; email?: string }>;
   stakeholders?: Stakeholder[];
+  /** The project lead (MATA-286): one per project, owns it and keeps it and its diamond current.
+   *  Not a diamond role; only admins appoint or remove them. */
+  project_lead?: ProjectLead | null;
 }
+export interface ProjectLead { person: string | null; email?: string }
 const ROLE_CODES: RoleCode[] = ["bo", "po", "plo", "to"];
 const MAX_STAKEHOLDERS = 12; // sync_diamonds.py draws at most this many beside the diamond
 const slugify = (x: string) =>
@@ -827,9 +831,18 @@ export function renameInSpec(spec: DiaSpec, from: string, to: string, email: str
 
 /** Opret diamant / Ret diamant. The diamond is saved at once in Multica, as `dia_spec` on the
  *  project's intake issue; sync_diamonds.py on the Mac applies it to roster.json and the hub within
- *  a minute. The page shows the saved roles straight away and the sync state until it lands. */
-export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row; people: string[]; rows: Row[]; mode?: "create" | "roles" }) {
+ *  a minute. The page shows the saved roles straight away and the sync state until it lands.
+ *  access (MATA-286): admins and the project lead change everything, but only admins the project
+ *  lead; the Product Owner only the stakeholders, sent on the saved diamond unchanged otherwise. */
+export function CreateDiamond({ row, people, rows, mode = "create", access = "admin" }: {
+  row: Row; people: string[]; rows: Row[]; mode?: "create" | "roles"; access?: "admin" | "lead" | "po";
+}) {
   const editing = mode === "roles";
+  const admin = useIsAdmin();
+  const rolesLocked = editing && access === "po";
+  const savedLead = editing ? row.dia_spec?.project_lead ?? null : null;
+  const initialLead = () => ({ person: savedLead?.person ?? "", email: savedLead?.email ?? "" });
+  const [lead, setLead] = useState(initialLead);
   const workspace = useCurrentWorkspace();
   const qc = useQueryClient();
   const { data: members } = useQuery({ ...memberListOptions(workspace?.id ?? ""), enabled: !!workspace?.id });
@@ -875,14 +888,22 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
       }
       return { ...x, [r]: next };
     });
-  const filled = ROLE_CODES.some((r) => roles[r].person.trim());
+  const filled = rolesLocked || ROLE_CODES.some((r) => roles[r].person.trim());
+  const leadChanged = admin && (lead.person.trim() !== (savedLead?.person ?? "") ||
+    lead.email.trim().toLowerCase() !== (savedLead?.email ?? "").toLowerCase());
+  const leadSpec = (): ProjectLead | null => {
+    if (!admin) return savedLead;
+    const person = lead.person.trim();
+    return person ? { person, ...(lead.email.trim() ? { email: lead.email.trim().toLowerCase() } : {}) } : null;
+  };
   const stakeholdersChanged = cleanStakeholders.length !== savedStakeholders.length ||
     cleanStakeholders.some((x, i) => x.name !== savedStakeholders[i]?.name || (x.title ?? "") !== (savedStakeholders[i]?.title ?? ""));
   const listed = (xs: Stakeholder[]) => xs.map((x) => (x.title ? `${x.name} (${x.title})` : x.name)).join(", ") || "ingen";
   const changes = [...ROLE_CODES.filter((r) => roles[r].person.trim() !== current(r))
     .map((r) => `${ROLE_NAME[r]}: ${current(r) || "ingen"} → ${roles[r].person.trim() || "ingen"}`),
-    ...(stakeholdersChanged ? [`Stakeholders: ${listed(savedStakeholders)} → ${listed(cleanStakeholders)}`] : [])];
-  const anyChange = !editing || changes.length > 0 || ROLE_CODES.some((r) => unconfirmed[r] !== wasUnconfirmed()[r]) || ROLE_CODES.some((r) => roles[r].email.trim());
+    ...(stakeholdersChanged ? [`Stakeholders: ${listed(savedStakeholders)} → ${listed(cleanStakeholders)}`] : []),
+    ...(editing && lead.person.trim() !== (savedLead?.person ?? "") ? [`Projektleder: ${savedLead?.person || "ingen"} → ${lead.person.trim() || "ingen"}`] : [])];
+  const anyChange = !editing || changes.length > 0 || leadChanged || ROLE_CODES.some((r) => unconfirmed[r] !== wasUnconfirmed()[r]) || ROLE_CODES.some((r) => roles[r].email.trim());
   // Checks the sync would refuse, shown before saving. The sync checks again.
   const slugTaken = !editing && rows.some((r) => r.id !== row.id && (r.hub === slug || r.dia_spec?.slug === slug));
   const nameTaken = !editing && rows.find((r) => r.id !== row.id && (r.hub || r.dia_spec) &&
@@ -896,6 +917,13 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
 
   const save = useMutation({
     mutationFn: async () => {
+      if (rolesLocked && row.intake_issue && row.dia_spec) {
+        const { stakeholders: _old, ...rest } = row.dia_spec;
+        const only: DiaSpec = { ...rest, ...(cleanStakeholders.length ? { stakeholders: cleanStakeholders } : {}) };
+        await api.setIssueMetadataKey(row.intake_issue, "dia_spec", JSON.stringify(only));
+        return;
+      }
+      const projectLead = leadSpec();
       const spec: DiaSpec = {
         slug,
         name: editing ? row.dia_spec?.name ?? row.name : name.trim(),
@@ -905,6 +933,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
           ...(unconfirmed[r] && roles[r].person.trim() ? { confirmed: false } : {}),
         }])) as DiaSpec["roles"],
         ...(cleanStakeholders.length ? { stakeholders: cleanStakeholders } : {}),
+        ...(projectLead ? { project_lead: projectLead } : {}),
       };
       let intake = row.intake_issue ?? null;
       if (!intake) {
@@ -924,7 +953,7 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
   if (!open && editing) {
     return (
       <button type="button" onClick={() => {
-        setRoles(initial()); setUnconfirmed(wasUnconfirmed());
+        setRoles(initial()); setUnconfirmed(wasUnconfirmed()); setLead(initialLead());
         setStakeholders(savedStakeholders.map((x) => ({ name: x.name, title: x.title ?? "" }))); setOpen(true);
       }}
         className="self-start rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent">Ret diamant</button>
@@ -965,11 +994,11 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
           <div key={r} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr_auto] sm:items-center">
             <span className="text-sm text-muted-foreground">{ROLE_NAME[r]}</span>
             <input id={`dia-${r}`} list="dia-people" value={roles[r].person} onChange={(e) => setRole(r, "person", e.target.value)}
-              className={input} placeholder="Navn — tom = ikke besat" aria-label={`${ROLE_NAME[r]}, navn`} />
+              className={input} placeholder="Navn — tom = ikke besat" aria-label={`${ROLE_NAME[r]}, navn`} disabled={rolesLocked} />
             <input id={`dia-${r}-email`} type="email" value={roles[r].email} onChange={(e) => setRole(r, "email", e.target.value)}
-              className={input} placeholder="Email (valgfri)" aria-label={`${ROLE_NAME[r]}, email`} />
+              className={input} placeholder="Email (valgfri)" aria-label={`${ROLE_NAME[r]}, email`} disabled={rolesLocked} />
             <label className="flex items-center gap-2 whitespace-nowrap text-sm text-muted-foreground">
-              <input id={`dia-${r}-unconfirmed`} type="checkbox" checked={unconfirmed[r]} disabled={!roles[r].person.trim()}
+              <input id={`dia-${r}-unconfirmed`} type="checkbox" checked={unconfirmed[r]} disabled={rolesLocked || !roles[r].person.trim()}
                 onChange={(e) => setUnconfirmed((x) => ({ ...x, [r]: e.target.checked }))} />
               Skal bekræftes
             </label>
@@ -985,6 +1014,22 @@ export function CreateDiamond({ row, people, rows, mode = "create" }: { row: Row
           );
         })}
       </div>
+      {rolesLocked && <p className="text-xs text-muted-foreground">Som Product Owner kan du rette stakeholders. Rollerne retter projektlederen eller en admin.</p>}
+      {admin ? (
+        <div className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr_auto] sm:items-center">
+          <span className="text-sm text-muted-foreground">Projektleder</span>
+          <input id="dia-pl" list="dia-people" value={lead.person} onChange={(e) => setLead((x) => ({ ...x, person: e.target.value }))}
+            className={input} placeholder="Navn — tom = ingen" aria-label="Projektleder, navn" maxLength={80} />
+          <input id="dia-pl-email" type="email" value={lead.email} onChange={(e) => setLead((x) => ({ ...x, email: e.target.value }))}
+            className={input} placeholder="Email" aria-label="Projektleder, email" />
+          <span className="text-xs text-muted-foreground sm:col-start-2 sm:col-end-5">
+            Én projektleder pr. projekt, uden for diamanten. Ejer projektet, retter diamant og kontekst og får fredagens overblik.
+            Email kobler login til rollen. Kun admins udpeger projektlederen.
+          </span>
+        </div>
+      ) : savedLead?.person ? (
+        <p className="text-sm"><span className="text-muted-foreground">Projektleder:</span> {savedLead.person} <span className="text-xs text-muted-foreground">(udpeges af en admin)</span></p>
+      ) : null}
       <p className="text-xs text-muted-foreground">
         En tom rolle dækkes af Platform Owner, indtil den er besat. «Skal bekræftes» markerer en person, der endnu ikke har sagt ja til rollen. Email kobler personens Multica-login til rollen, så projekt-chatten
         ved, hvem der spørger. Gemmes med det samme; hub og status følger med inden for et minut.
@@ -1559,9 +1604,11 @@ export function OverviewTab({ row, chatAgentId, agentName, agents, project, onMo
   );
 }
 
-/** Diamant-fanen: de fire roller, hvornår hver sidst har opdateret, og diagrammet. */
-export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: Row; chatAgentId: string | null; people: string[]; rows: Row[]; viewsKey: string }) {
+/** Diamant-fanen: de fire roller, hvornår hver sidst har opdateret, projektlederen og diagrammet. */
+export function DiamondTab({ row, chatAgentId, people, rows, viewsKey, me }: { row: Row; chatAgentId: string | null; people: string[]; rows: Row[]; viewsKey: string; me?: string | null }) {
   const admin = useIsAdmin();
+  const email = useAuthStore((s) => s.user?.email ?? null);
+  const access = diamondAccess(row, { me: me ?? null, email, admin });
   if (!row.hub && !row.dia_spec) {
     return (
       <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">
@@ -1599,13 +1646,25 @@ export function DiamondTab({ row, chatAgentId, people, rows, viewsKey }: { row: 
           </ul>
         </div>
       )}
-      {row.multica_project && admin && (
-        <div className="flex flex-wrap items-start gap-2">
-          <CreateDiamond key={row.dia_spec ? JSON.stringify(row.dia_spec.roles) : "none"} row={row} people={people} rows={rows} mode="roles" />
-          {row.dia_spec && <ArchiveDiamond row={row} />}
+      {row.dia_spec?.project_lead?.person && (
+        <div className="flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">Projektleder, uden for diamanten</div>
+          <div className="self-start rounded-md border px-3 py-1.5 text-sm">
+            <span className="font-medium">{row.dia_spec.project_lead.person}</span>
+            <span className="text-muted-foreground"> · har ansvaret for, at projektet og diamanten er opdateret</span>
+          </div>
         </div>
       )}
-      {row.multica_project && !admin && <p className="text-xs text-muted-foreground">Kun workspace-admins kan rette roller og arkivere diamanten.</p>}
+      {row.multica_project && access && (
+        <div className="flex flex-wrap items-start gap-2">
+          <CreateDiamond key={row.dia_spec ? JSON.stringify([row.dia_spec.roles, row.dia_spec.project_lead]) : "none"} row={row} people={people} rows={rows}
+            mode="roles" access={access} />
+          {row.dia_spec && access !== "po" && <ArchiveDiamond row={row} />}
+        </div>
+      )}
+      {row.multica_project && !access && (
+        <p className="text-xs text-muted-foreground">Kun workspace-admins og projektlederen kan rette roller og arkivere diamanten; Product Owner kan rette stakeholders.</p>
+      )}
       {row.hub ? <Diagram url={`/diamond-views/${slug}.svg?v=${viewsKey}`} label="diamant" />
         : <p className="text-sm text-muted-foreground">Diagrammet tegnes, når diamanten er synkroniseret.</p>}
       {chatAgentId && row.hub && (

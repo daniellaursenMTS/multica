@@ -1030,6 +1030,10 @@
       "member": {
         "label": "멤버",
         "description": "태스크 생성 및 작업"
+      },
+      "viewer": {
+        "label": "열람자",
+        "description": "포털과 MCP에서 공유된 프로젝트 지식을 열람. Multica 자체에는 접근 불가"
       }
     },
     "share_links_title": "공유 링크",

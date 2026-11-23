@@ -119,7 +119,11 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		mcpRPCResult(w, msg.ID, map[string]any{})
 	case "tools/list":
-		mcpRPCResult(w, msg.ID, map[string]any{"tools": matasWithApps(append(incomingMCPTools(), matasMCPTools()...))})
+		tools := append(incomingMCPTools(), matasMCPTools()...)
+		if h.matasViewer(r) {
+			tools = matasViewerTools(tools)
+		}
+		mcpRPCResult(w, msg.ID, map[string]any{"tools": matasWithApps(tools)})
 	case "resources/list":
 		mcpRPCResult(w, msg.ID, map[string]any{"resources": matasAppResources()})
 	case "resources/templates/list":
@@ -138,6 +142,11 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		if json.Unmarshal(msg.Params, &p) != nil {
 			mcpRPCError(w, msg.ID, -32602, "invalid tool call")
+			return
+		}
+		// A reader (workspace role viewer, MATA-286) may call only the read tools and ask Knowledge Hub.
+		if !matasViewerTool[p.Name] && h.matasViewer(r) {
+			mcpRPCResult(w, msg.ID, map[string]any{"isError": true, "content": []any{map[string]string{"type": "text", "text": "readers (workspace role viewer) may only use the read tools and multica_ask_project"}}})
 			return
 		}
 		var result any
@@ -311,6 +320,10 @@ func (h *Handler) mcpGetIssue(r *http.Request, raw json.RawMessage) (any, error)
 	}
 	issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: id, WorkspaceID: ws})
 	if err != nil {
+		return nil, errors.New("issue not found in this workspace")
+	}
+	// A reader sees only the questions they asked themselves.
+	if h.matasViewer(r) && (issue.CreatorType != "member" || util.UUIDToString(issue.CreatorID) != requestUserID(r)) {
 		return nil, errors.New("issue not found in this workspace")
 	}
 	return h.mcpIssueReceipt(r, issue), nil

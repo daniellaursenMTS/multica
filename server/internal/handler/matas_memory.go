@@ -71,6 +71,11 @@ type matasMemoryPost struct {
 	SupersededBy     string `json:"superseded_by,omitempty"`
 	ConfirmedBy      string `json:"confirmed_by,omitempty"`
 	ConfirmedAt      string `json:"confirmed_at,omitempty"`
+	ConfirmedByUser  string `json:"confirmed_by_user,omitempty"`
+	ConfirmedVia     string `json:"confirmed_via,omitempty"`
+	DeclinedBy       string `json:"declined_by,omitempty"`
+	DeclinedByUser   string `json:"declined_by_user,omitempty"`
+	DeclinedAt       string `json:"declined_at,omitempty"`
 	Review           string `json:"review,omitempty"`
 }
 
@@ -717,11 +722,17 @@ func (h *Handler) matasDecisionLogFor(r *http.Request, ws, member pgtype.UUID, p
 		trail.settle(false, "There is no decision log yet. Say so, and name whom to ask.")
 	default:
 		log := matasBuildDecisionLog(p.View.Posts)
+		// The trail reads the proposals as posts; the answer then shows them with who may confirm.
+		matasDecisionTrail(trail, p, log)
+		proposals, err := h.matasProposalEntries(r.Context(), ws, member, p, log["proposals"].([]matasMemoryPost))
+		if err != nil {
+			return nil, err
+		}
+		log["proposals"] = proposals
 		for k, v := range log {
 			out[k] = v
 		}
 		out["generated_at"] = p.View.GeneratedAt
-		matasDecisionTrail(trail, p, log)
 	}
 	out["trail"] = trail
 	return out, nil
@@ -800,7 +811,7 @@ func matasMemoryTools(str func(string) map[string]any, obj func([]string, map[st
 			"view":       enum([]string{"current", "log"}, "current (default): what holds now, without superseded posts and events. log: every post, events and superseded ones included."),
 			"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": matasMemoryMaxLimit, "description": "At most this many posts (default 20)."},
 		}), "annotations": ro},
-		map[string]any{"name": "multica_decision_log", "description": "A project's decision log: the decisions that hold, each with the chain of decisions it replaced, the role that took it, when and its source; proposals waiting for whoever holds the decision right; posts awaiting review. Only for projects whose memory you may read; otherwise it says whom to ask. trail shows the decisions used, the superseded ones and proposals discarded, and what is not settled.", "inputSchema": obj([]string{"project_id"}, map[string]any{
+		map[string]any{"name": "multica_decision_log", "description": "A project's decision log: the decisions that hold, each with the chain of decisions it replaced, the role that took it, when and its source; proposals waiting for whoever holds the decision right, each with who that is and any confirmation waiting for the next sync; posts awaiting review. Only that person turns a proposal into a decision, with «Bekræft» on the project page; agents never do. Only for projects whose memory you may read; otherwise it says whom to ask. trail shows the decisions used, the superseded ones and proposals discarded, and what is not settled.", "inputSchema": obj([]string{"project_id"}, map[string]any{
 			"project_id": str("Project UUID or project number, e.g. 1004-2."),
 		}), "annotations": ro},
 	}

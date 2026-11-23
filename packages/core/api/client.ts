@@ -3585,6 +3585,11 @@ export class ApiClient {
     return this.fetch(`/api/projects/${id}/decision-log`);
   }
 
+  /** Matas: the holder of the decision right confirms a proposal, or says it is not a decision. */
+  async confirmProjectDecision(id: string, body: { post: string; rev: number; action: "confirm" | "decline" }): Promise<unknown> {
+    return this.fetch(`/api/projects/${id}/decision-log/confirm`, { method: "POST", body: JSON.stringify(body) });
+  }
+
   async createProject(data: CreateProjectRequest): Promise<Project> {
     return this.fetch("/api/projects", {
       method: "POST",

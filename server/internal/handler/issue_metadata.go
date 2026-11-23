@@ -177,7 +177,7 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		req.Value = value
 	}
 	if key == "dia_spec" {
-		if status, msg := h.matasDiamondGuard(r, issue); status != 0 {
+		if status, msg := h.matasDiamondGuard(r, issue, req.Value); status != 0 {
 			writeError(w, status, msg)
 			return
 		}
@@ -259,7 +259,7 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if key == "dia_spec" {
-		if status, msg := h.matasDiamondGuard(r, issue); status != 0 {
+		if status, msg := h.matasDiamondGuard(r, issue, nil); status != 0 {
 			writeError(w, status, msg)
 			return
 		}

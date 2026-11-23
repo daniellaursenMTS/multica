@@ -1292,6 +1292,10 @@
       "member": {
         "label": "メンバー",
         "description": "タスクの作成と作業"
+      },
+      "viewer": {
+        "label": "閲覧者",
+        "description": "ポータルと MCP で共有されたプロジェクト情報を閲覧。Multica 本体にはアクセス不可"
       }
     },
     "share_links_title": "共有リンク",

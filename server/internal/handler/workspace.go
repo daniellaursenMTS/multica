@@ -496,6 +496,18 @@ type MemberWithUserResponse struct {
 	AvatarURL   *string `json:"avatar_url"`
 }
 
+// GetMyMembership returns the caller's own membership in the workspace. A viewer may call it
+// (MATA-286), so the frontend can show them the page that points to the portal; the member list
+// is not open to viewers.
+func (h *Handler) GetMyMembership(w http.ResponseWriter, r *http.Request) {
+	member, ok := ctxMember(r.Context())
+	if !ok {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, memberToResponse(member))
+}
+
 func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
@@ -551,7 +563,7 @@ func normalizeMemberRole(role string) (string, bool) {
 
 	role = strings.TrimSpace(role)
 	switch role {
-	case "owner", "admin", "member":
+	case "owner", "admin", "member", "viewer":
 		return role, true
 	default:
 		return "", false

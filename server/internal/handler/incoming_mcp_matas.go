@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -41,16 +42,64 @@ func matasMCPTools() []any {
 	ro := map[string]any{"readOnlyHint": true, "openWorldHint": false}
 	rw := map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 	return append([]any{
-		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: project number (Capex number and a sequence, e.g. 1004-2; only projects with a Capex have one), status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, stakeholders outside the diamond with their titles, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
+		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: project number (Capex number and a sequence, e.g. 1004-2; only projects with a Capex have one), status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, the project lead (who owns the project and keeps it and its diamond current; not a diamond role), stakeholders outside the diamond with their titles, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_list_agents", "description": "List the agents a task can be given to, with what each does.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_project_summary", "description": "Get what a project's owners chose to share: their approved summary, or a note that the whole project hub is shared (then use multica_ask_project) or that nothing is shared.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID or project number (e.g. 1004-2) from multica_list_projects.")}), "annotations": ro},
 		map[string]any{"name": "multica_ask_project", "description": "Ask the Knowledge Hub agent a question. It answers from Matas' own sources and from projects only as far as their owners share them. Asynchronous: poll multica_get_issue with the returned id; the answer appears there as `answer` within a few minutes.", "inputSchema": obj([]string{"request_id", "question"}, map[string]any{"request_id": str("Stable UUID for this question; reuse it to retry."), "question": str("The question, 1–4000 characters."), "project_id": str("Optional project the question is about: its UUID or its project number, e.g. 1004-2.")}), "annotations": rw},
-		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID or project number (e.g. 1004-2); the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today.")}), "annotations": rw},
+		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond or its project lead. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID or project number (e.g. 1004-2); the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today.")}), "annotations": rw},
 		map[string]any{"name": "multica_create_task", "description": "Create a task in a project and give it to an agent (see multica_list_agents). Poll multica_get_issue for status; the agent's latest reply appears as `answer`.", "inputSchema": obj([]string{"request_id", "project_id", "title", "agent"}, map[string]any{"request_id": str("Stable UUID for this task; reuse it to retry."), "project_id": str("Project UUID or project number, e.g. 1004-2."), "title": str("Task title, 1–200 characters."), "description": str("What to do, the background and what done looks like."), "agent": str("Agent name or UUID."), "start": map[string]any{"type": "boolean", "description": "Start the agent now (default true). False parks the task in backlog."}}), "annotations": rw},
 		map[string]any{"name": "multica_project_context", "description": "Get a project's context before acting on it: goals, priorities, milestones, who decides what per area (business, product, platform, technical, steerco), the sources that count and similar-looking ones that do not, known risks to watch for and the project's own terms, plus its diamond. stale is true when nobody has changed it for 30 days. Pass project_id \"portfolio\" for the portfolio's context.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID, project number (e.g. 1004-2), or \"portfolio\".")}), "annotations": ro},
 		map[string]any{"name": "multica_propose_project_context", "description": "Propose a change to a project's context, e.g. a new Teams channel seen in three updates. Agents never edit the context; this creates a task in review for the project's product owner, who decides. Poll multica_get_issue for its status.", "inputSchema": obj([]string{"request_id", "project_id", "field", "proposal", "why"}, map[string]any{"request_id": str("Stable UUID for this proposal; reuse it to retry."), "project_id": str("Project UUID or project number, e.g. 1004-2."), "field": map[string]any{"type": "string", "enum": matasContextFields, "description": "The context field the change is about."}, "proposal": str("What should change, 1–2000 characters."), "why": str("Why, with where it was seen, 1–2000 characters.")}), "annotations": rw},
 		matasUsageTool(),
 	}, matasMemoryTools(str, obj, ro)...)
+}
+
+// matasViewerTool are the MCP tools a reader (workspace role viewer, MATA-286) may call: the read
+// tools, which already follow what owners share, and a question to Knowledge Hub, whose answer
+// they read through multica_get_issue on their own questions only.
+var matasViewerTool = map[string]bool{
+	"multica_list_projects": true, "multica_project_summary": true, "multica_project_context": true,
+	"multica_search_memory": true, "multica_decision_log": true, "multica_synergy_check": true,
+	"multica_get_issue": true, "multica_ask_project": true,
+}
+
+func matasViewerTools(tools []any) []any {
+	out := []any{}
+	for _, t := range tools {
+		if m, ok := t.(map[string]any); ok && matasViewerTool[fmt.Sprint(m["name"])] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// matasWithoutEmails drops the e-mail from each person in a diamond's roles, project lead or
+// stakeholders: readers see people by name and role only.
+func matasWithoutEmails(raw json.RawMessage) json.RawMessage {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return raw
+	}
+	var strip func(any)
+	strip = func(x any) {
+		switch t := x.(type) {
+		case map[string]any:
+			delete(t, "email")
+			for _, c := range t {
+				strip(c)
+			}
+		case []any:
+			for _, c := range t {
+				strip(c)
+			}
+		}
+	}
+	strip(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // matasIntakes returns each project's intake issue metadata (pf_intake), keyed by project.
@@ -94,6 +143,25 @@ func (h *Handler) matasWorkspace(r *http.Request) (pgtype.UUID, pgtype.UUID, err
 	return ws, member, nil
 }
 
+// matasRole is the caller's workspace role: from the workspace middleware when it ran, else read.
+// Empty when the caller is not a member.
+func (h *Handler) matasRole(r *http.Request, ws, member pgtype.UUID) string {
+	if m, ok := ctxMember(r.Context()); ok && m.UserID == member && m.WorkspaceID == ws {
+		return m.Role
+	}
+	m, err := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{UserID: member, WorkspaceID: ws})
+	if err != nil {
+		return ""
+	}
+	return m.Role
+}
+
+// matasViewer is whether the MCP caller is a reader (workspace role viewer, MATA-286).
+func (h *Handler) matasViewer(r *http.Request) bool {
+	ws, member, err := h.matasWorkspace(r)
+	return err == nil && middleware.IsViewer(h.matasRole(r, ws, member))
+}
+
 // matasProject finds a project by its UUID or its project number (e.g. 1004-2).
 func (h *Handler) matasProject(r *http.Request, ws pgtype.UUID, id string) (db.Project, error) {
 	id = strings.TrimSpace(id)
@@ -121,6 +189,7 @@ func (h *Handler) mcpListProjects(r *http.Request, raw json.RawMessage) (any, er
 	if err != nil {
 		return nil, err
 	}
+	viewer := h.matasViewer(r)
 	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{WorkspaceID: ws})
 	if err != nil {
 		return nil, errors.New("could not list projects")
@@ -148,16 +217,27 @@ func (h *Handler) mcpListProjects(r *http.Request, raw json.RawMessage) (any, er
 			}
 			item["fields"] = fields
 			var spec struct {
-				Name         string                     `json:"name"`
-				Archived     bool                       `json:"archived"`
-				Roles        map[string]json.RawMessage `json:"roles"`
-				Stakeholders json.RawMessage            `json:"stakeholders"`
+				Name         string          `json:"name"`
+				Archived     bool            `json:"archived"`
+				Roles        json.RawMessage `json:"roles"`
+				Stakeholders json.RawMessage `json:"stakeholders"`
+				ProjectLead  json.RawMessage `json:"project_lead"`
 			}
 			if s := metaString(m, "dia_spec"); s != "" && json.Unmarshal([]byte(s), &spec) == nil && !spec.Archived {
-				diamond := map[string]any{"name_in_updates": spec.Name, "roles": spec.Roles}
+				people := func(raw json.RawMessage) json.RawMessage {
+					if viewer {
+						return matasWithoutEmails(raw)
+					}
+					return raw
+				}
+				diamond := map[string]any{"name_in_updates": spec.Name, "roles": people(spec.Roles)}
 				// People in the project outside the diamond, with the title the owner gave them.
 				if len(spec.Stakeholders) > 0 && string(spec.Stakeholders) != "null" {
-					diamond["stakeholders"] = spec.Stakeholders
+					diamond["stakeholders"] = people(spec.Stakeholders)
+				}
+				// The project lead owns the project and keeps it and its diamond current; not a role.
+				if l, ok := matasSpecOf(m); ok && l.lead() != nil {
+					diamond["project_lead"] = people(spec.ProjectLead)
 				}
 				if st := metaString(m, "dia_status"); st != "" {
 					diamond["activity"] = json.RawMessage(st)

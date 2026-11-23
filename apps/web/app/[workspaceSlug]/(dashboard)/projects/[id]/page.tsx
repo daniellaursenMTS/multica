@@ -78,7 +78,7 @@ function ProjectPage({ id }: { id: string }) {
                 onMoved={(newId) => router.push(p.projectDetail(newId))} openDiamond={row.hub || row.dia_spec ? () => go("diamond") : null}
                 editing={editing} setEditing={setEditing} people={people} rows={rows} me={me} />
             )}
-            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} people={people} rows={rows} viewsKey={viewsKey} />}
+            {row && view === "diamond" && <DiamondTab row={row} chatAgentId={chatAgentId} people={people} rows={rows} viewsKey={viewsKey} me={me} />}
             {row && view === "context" && <ContextTab row={row} me={me} />}
             {row?.multica_project && view === "decisions" && <DecisionsTab projectId={row.multica_project} />}
           </div>

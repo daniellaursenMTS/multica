@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -115,17 +116,18 @@ func matasLoadMemory(dir string) map[string]matasMemoryView {
 	return out
 }
 
-// matasMemoryReadable: the diamond's owners always read a project's memory; others only when the
-// owners have shared the whole project with Knowledge Hub and the sync has applied that choice.
-func matasMemoryReadable(m map[string]json.RawMessage, email string) bool {
-	if email = strings.ToLower(strings.TrimSpace(email)); email != "" && matasContextEditorEmails(m)[email] {
+// matasMemoryReadable: workspace owners and admins read every project's memory (changed
+// 23.11.2026, MATA-286), and the diamond's owners and the project lead always read their project's;
+// others, viewers included, only when the owners have shared the whole project with Knowledge Hub
+// and the sync has applied that choice.
+func matasMemoryReadable(m map[string]json.RawMessage, email, role string) bool {
+	if roleAllowed(role, "owner", "admin") {
 		return true
 	}
-	share := metaString(m, "kh_share")
-	var ks struct {
-		Mode string `json:"mode"`
+	if email = strings.ToLower(strings.TrimSpace(email)); email != "" && !middleware.IsViewer(role) && matasContextEditorEmails(m)[email] {
+		return true
 	}
-	return share != "" && share == metaString(m, "kh_synced") && json.Unmarshal([]byte(share), &ks) == nil && ks.Mode == "full"
+	return matasSharedMode(m) == "full"
 }
 
 // matasMemoryAsk is whom to ask about a project whose memory is not shared: its product owner,
@@ -461,6 +463,7 @@ func (h *Handler) matasMemoryScope(r *http.Request, ws, member pgtype.UUID, only
 	if err != nil {
 		return nil, errors.New("could not read your account")
 	}
+	role := h.matasRole(r, ws, member)
 	intakes, err := h.matasIntakes(r, ws)
 	if err != nil {
 		return nil, errors.New("could not read project fields")
@@ -495,7 +498,7 @@ func (h *Handler) matasMemoryScope(r *http.Request, ws, member pgtype.UUID, only
 		m := intakes[id]
 		v, has := views[id]
 		out = append(out, matasMemoryProject{ID: id, Title: project.Title, Number: metaString(m, matasNumberKey), Meta: m,
-			View: v, HasView: has, Readable: matasMemoryReadable(m, user.Email)})
+			View: v, HasView: has, Readable: matasMemoryReadable(m, user.Email, role)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Title < out[j].Title })
 	return out, nil

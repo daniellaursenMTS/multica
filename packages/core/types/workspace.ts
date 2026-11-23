@@ -1,4 +1,6 @@
-export type MemberRole = "owner" | "admin" | "member";
+/** `viewer` (Matas, MATA-286) reads shared knowledge through the portal and MCP and is refused
+ *  Multica's own interface by the server. */
+export type MemberRole = "owner" | "admin" | "member" | "viewer";
 
 export interface WorkspaceRepo {
   url: string;

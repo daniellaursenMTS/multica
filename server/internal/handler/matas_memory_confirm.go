@@ -43,7 +43,10 @@ const matasMemConfirmPrefix = "mem_confirm."
 var (
 	matasRoleOrder = []string{"bo", "po", "plo", "to"}
 	matasAreaRole  = map[string]string{"business": "bo", "product": "po", "platform": "plo", "technical": "to"}
-	matasRoleTitle = map[string]string{"bo": "Business Owner", "po": "Product Owner", "plo": "Platform Owner", "to": "Technical Owner"}
+	matasRoleTitle = map[string]string{"bo": "Business Owner", "po": "Product Owner", "plo": "Platform Owner", "to": "Technical Owner", matasLeadRole: "Projektleder"}
+	// matasRoleLabels are the titles decision_rights may name a holder by, as memory.py's ROLE_LABELS.
+	matasRoleLabels = map[string][]string{"bo": {"business owner"}, "po": {"product owner"}, "plo": {"platform owner"}, "to": {"technical owner"},
+		matasLeadRole: {"projektleder", "project lead"}}
 )
 
 // matasMemConfirmReserved is true for the keys only the confirm endpoint writes.
@@ -102,14 +105,8 @@ func matasWordIn(hay, word string) bool {
 // matasHolderFor finds the role and person that hold the decision right for an area, from the
 // intake's dia_spec, ctx_spec and ctx_editors. It does not look up the Multica user.
 func matasHolderFor(area string, m map[string]json.RawMessage) matasDecisionHolder {
-	var spec struct {
-		Archived bool `json:"archived"`
-		Roles    map[string]struct {
-			Person string `json:"person"`
-			Email  string `json:"email"`
-		} `json:"roles"`
-	}
-	if s := metaString(m, "dia_spec"); s == "" || json.Unmarshal([]byte(s), &spec) != nil {
+	spec, ok := matasSpecOf(m)
+	if !ok {
 		return matasDecisionHolder{Reason: "Projektet har ingen diamant, så ingen kan kobles til beslutningsretten."}
 	}
 	if spec.Archived {
@@ -119,19 +116,29 @@ func matasHolderFor(area string, m map[string]json.RawMessage) matasDecisionHold
 		DecisionRights map[string]string `json:"decision_rights"`
 	}
 	_ = json.Unmarshal([]byte(metaString(m, matasContextKey)), &ctx)
-	person := func(r string) string { return strings.TrimSpace(spec.Roles[r].Person) }
+	// The project lead holds a right only when decision_rights names them; it owns no area.
+	person := func(r string) string {
+		if r == matasLeadRole {
+			if l := spec.lead(); l != nil {
+				return strings.TrimSpace(l.Person)
+			}
+			return ""
+		}
+		return strings.TrimSpace(spec.Roles[r].Person)
+	}
 	out := matasDecisionHolder{Named: strings.TrimSpace(ctx.DecisionRights[area])}
 	roles := []string{}
 	switch role, owned := matasAreaRole[area]; {
 	case out.Named != "":
 		// As holds_right(): the person's full or first name, or the role's name, in the entry.
 		h := matasNorm(out.Named)
-		for _, r := range matasRoleOrder {
+		for _, r := range append(slices.Clone(matasRoleOrder), matasLeadRole) {
 			parts := strings.Fields(matasNorm(person(r)))
 			if len(parts) == 0 {
 				continue
 			}
-			if matasWordIn(h, strings.Join(parts, " ")) || matasWordIn(h, parts[0]) || strings.Contains(h, strings.ToLower(matasRoleTitle[r])) {
+			labelled := slices.ContainsFunc(matasRoleLabels[r], func(l string) bool { return strings.Contains(h, l) })
+			if matasWordIn(h, strings.Join(parts, " ")) || matasWordIn(h, parts[0]) || labelled {
 				roles = append(roles, r)
 			}
 		}
@@ -162,9 +169,13 @@ func matasHolderFor(area string, m map[string]json.RawMessage) matasDecisionHold
 	if r := matasAreaRole[area]; slices.Contains(roles, r) {
 		out.Role = r
 	}
-	editors := matasContextEditorsByRole(m)
 	for _, r := range roles {
-		for _, e := range append([]string{strings.ToLower(strings.TrimSpace(spec.Roles[r].Email))}, editors[r]...) {
+		emails := []string{}
+		for e := range matasRoleEmails(m, r) {
+			emails = append(emails, e)
+		}
+		slices.Sort(emails)
+		for _, e := range emails {
 			if matasContextEmailRE.MatchString(e) && !slices.Contains(out.Emails, e) {
 				out.Emails = append(out.Emails, e)
 			}

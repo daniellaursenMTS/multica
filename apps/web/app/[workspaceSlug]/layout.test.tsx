@@ -9,7 +9,8 @@ const state = vi.hoisted(() => ({
     onboarded_at: "2026-01-01T00:00:00Z",
   } as { id: string; onboarded_at: string | null } | null,
   isAuthLoading: false,
-  workspace: null as { id: string; slug: string } | null,
+  workspace: null as { id: string; slug: string; name?: string } | null,
+  role: "member" as string,
   workspacesBySlug: {} as Record<string, { id: string; slug: string } | null>,
   workspaceError: false,
   hasBeenSeen: false,
@@ -32,6 +33,10 @@ vi.mock("@multica/core/auth", () => ({
 }));
 
 vi.mock("@multica/core/workspace", () => ({
+  myMembershipOptions: (wsId: string) => ({
+    queryKey: ["membership", wsId],
+    queryFn: async () => ({ id: "m-1", workspace_id: wsId, user_id: "user-1", role: state.role }),
+  }),
   workspaceBySlugOptions: (slug: string) => ({
     queryKey: ["workspace-by-slug", slug],
     queryFn: async () => {
@@ -118,6 +123,7 @@ beforeEach(() => {
   state.workspaceError = false;
   state.hasBeenSeen = false;
   state.pathname = "/acme/issues";
+  state.role = "member";
 });
 
 describe("WorkspaceLayout", () => {
@@ -139,6 +145,29 @@ describe("WorkspaceLayout", () => {
 
     expect(await screen.findByTestId("no-access")).toBeInTheDocument();
     expect(screen.queryByTestId("workspace-loading")).toBeNull();
+  });
+});
+
+// A reader (workspace role viewer, MATA-286) is shown the page pointing to the portal, never
+// Multica's own interface.
+describe("WorkspaceLayout for a viewer", () => {
+  it("shows a viewer the portal page instead of the workspace", async () => {
+    state.role = "viewer";
+    state.workspace = { id: "ws-acme", slug: "acme", name: "Matas" };
+
+    renderLayout();
+
+    expect(await screen.findByText("Du er læser i Matas")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-content")).toBeNull();
+  });
+
+  it("shows a member the workspace", async () => {
+    state.workspace = { id: "ws-acme", slug: "acme", name: "Matas" };
+
+    renderLayout();
+
+    expect(await screen.findByTestId("workspace-content")).toBeInTheDocument();
+    expect(screen.queryByText("Du er læser i Matas")).toBeNull();
   });
 });
 

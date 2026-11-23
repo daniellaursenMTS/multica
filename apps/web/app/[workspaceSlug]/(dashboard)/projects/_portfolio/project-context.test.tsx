@@ -25,7 +25,7 @@ vi.mock("@multica/views/navigation", () => ({
   AppLink: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
 }));
 
-import { canEditContext, contextAge, contextProblem, ContextTab, parseContext, type ProjectContext } from "./project-context";
+import { canEditContext, diamondAccess, contextAge, contextProblem, ContextTab, parseContext, type ProjectContext } from "./project-context";
 import type { Row } from "./portfolio";
 
 const base: ProjectContext = {
@@ -84,6 +84,24 @@ describe("project context fields", () => {
     const archived = row();
     archived.dia_spec = { ...archived.dia_spec!, archived: true };
     expect(canEditContext(archived, { me: "Bent", email: null, admin: false })).toBe(false);
+  });
+});
+
+describe("project lead (MATA-286)", () => {
+  const withLead = () => row({ dia_spec: { ...row().dia_spec!, project_lead: { person: "Lis", email: "lis@matas.dk" } } });
+
+  it("lets the project lead edit the context", () => {
+    expect(canEditContext(withLead(), { me: "Lis", email: null, admin: false })).toBe(true);
+    expect(canEditContext(withLead(), { me: null, email: "LIS@matas.dk", admin: false })).toBe(true);
+    expect(canEditContext(row(), { me: "Lis", email: null, admin: false })).toBe(false);
+  });
+
+  it("gives admins and the project lead the diamond, the product owner its stakeholders", () => {
+    expect(diamondAccess(withLead(), { me: "Otto", email: null, admin: true })).toBe("admin");
+    expect(diamondAccess(withLead(), { me: null, email: "lis@matas.dk", admin: false })).toBe("lead");
+    expect(diamondAccess(withLead(), { me: null, email: "petra@matas.dk", admin: false })).toBe("po");
+    expect(diamondAccess(withLead(), { me: "Bent", email: null, admin: false })).toBe(null);
+    expect(diamondAccess(row({ dia_spec: null }), { me: "Lis", email: null, admin: false })).toBe(null);
   });
 });
 

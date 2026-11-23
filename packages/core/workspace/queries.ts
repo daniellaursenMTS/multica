@@ -45,6 +45,14 @@ export function memberListOptions(wsId: string) {
   });
 }
 
+/** The caller's own membership (role), which a viewer may read too (MATA-286). */
+export function myMembershipOptions(wsId: string) {
+  return queryOptions({
+    queryKey: [...workspaceKeys.members(wsId), "me"] as const,
+    queryFn: () => api.getMyMembership(wsId),
+  });
+}
+
 export function agentListOptions(wsId: string) {
   return queryOptions({
     queryKey: workspaceKeys.agents(wsId),

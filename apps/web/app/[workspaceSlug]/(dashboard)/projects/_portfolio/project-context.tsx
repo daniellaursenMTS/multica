@@ -82,12 +82,29 @@ export function contextAge(c: ProjectContext | null, now = new Date()): { days: 
   return { days, stale: days >= STALE_DAYS };
 }
 
-/** Who may edit a project's context; the server checks the same. */
-export function canEditContext(row: Row, opts: { me: string | null; email: string | null; admin: boolean }): boolean {
+type Me = { me: string | null; email: string | null; admin: boolean };
+const isPerson = (p: { person: string | null; email?: string } | null | undefined, opts: Me) => {
+  const email = opts.email?.toLowerCase();
+  return !!p?.person && ((!!opts.me && p.person === opts.me) || (!!email && p.email?.toLowerCase() === email));
+};
+
+/** Who may edit a project's context: admins, the diamond's owners and the project lead. The server
+ *  checks the same. */
+export function canEditContext(row: Row, opts: Me): boolean {
   if (opts.admin) return true;
   if (!row.dia_spec || row.dia_spec.archived) return false;
-  const email = opts.email?.toLowerCase();
-  return Object.values(row.dia_spec.roles).some((r) => !!r.person && ((!!opts.me && r.person === opts.me) || (!!email && r.email?.toLowerCase() === email)));
+  return Object.values(row.dia_spec.roles).some((r) => isPerson(r, opts)) || isPerson(row.dia_spec.project_lead, opts);
+}
+
+/** What the person may change in an existing diamond (MATA-286): admins everything and the
+ *  project lead; the project lead everything but who the project lead is; the Product Owner only
+ *  the stakeholders. The server checks the same. */
+export function diamondAccess(row: Row, opts: Me): "admin" | "lead" | "po" | null {
+  if (opts.admin) return "admin";
+  if (!row.dia_spec || row.dia_spec.archived) return null;
+  if (isPerson(row.dia_spec.project_lead, opts)) return "lead";
+  if (isPerson(row.dia_spec.roles.po, opts)) return "po";
+  return null;
 }
 
 /** Workspace owner or admin: may edit any context, the portfolio context and existing diamonds. */

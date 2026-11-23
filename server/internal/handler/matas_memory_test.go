@@ -115,38 +115,95 @@ func mustJSON(s string) string {
 	return string(b)
 }
 
-func TestIncomingMCPMemory(t *testing.T) {
-	tag := uuid.NewString()[:8]
-	counter := func() int {
-		var n int
-		dbfx.QueryRow(t, `UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter`, testWorkspaceID).Scan(&n)
-		return n
-	}
-	poEmail := fmt.Sprintf("mem-petra-%s@matas.test", tag)
-	po := dbfx.User(t, "Petra", poEmail)
-	dbfx.Member(t, testWorkspaceID, po, "member")
-	outsider := dbfx.User(t, "Otto", fmt.Sprintf("mem-otto-%s@matas.test", tag))
-	dbfx.Member(t, testWorkspaceID, outsider, "member")
+// memoryFixture builds projects with a diamond, a memory view and members, and calls the MCP as
+// one of them.
+type memoryFixture struct {
+	t   *testing.T
+	tag string
+	dir string
+}
 
+func newMemoryFixture(t *testing.T) *memoryFixture {
 	dir := t.TempDir()
 	t.Setenv(matasMemoryDirEnv, dir)
-	full, summary := `{"mode":"full","at":"2026-11-20"}`, `{"mode":"summary","at":"2026-11-20"}`
-	project := func(name, number string, roles map[string]any, posts []matasMemoryPost, extra map[string]any) string {
-		spec, _ := json.Marshal(map[string]any{"slug": strings.ToLower(name), "name": name, "roles": roles})
-		meta := map[string]any{"pf_intake": true, "dia_spec": string(spec), "pf_number": number}
-		for k, v := range extra {
-			meta[k] = v
-		}
-		raw, _ := json.Marshal(meta)
-		id := dbfx.Project(t, name+" "+tag)
-		dbfx.Issue(t, "Intake — "+name, testutil.Cols{"status": "done", "project_id": id, "number": counter(), "metadata": string(raw)})
-		dbfx.Cleanup(t, `DELETE FROM issue WHERE project_id = $1`, id)
+	return &memoryFixture{t: t, tag: uuid.NewString()[:8], dir: dir}
+}
+
+func (f *memoryFixture) number() int {
+	var n int
+	dbfx.QueryRow(f.t, `UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter`, testWorkspaceID).Scan(&n)
+	return n
+}
+
+func (f *memoryFixture) member(name string) (string, string) {
+	email := fmt.Sprintf("mem-%s-%s@matas.test", strings.ToLower(name), f.tag)
+	id := dbfx.User(f.t, name, email)
+	dbfx.Member(f.t, testWorkspaceID, id, "member")
+	return id, email
+}
+
+func (f *memoryFixture) project(name, number string, roles map[string]any, posts []matasMemoryPost, extra map[string]any) string {
+	t := f.t
+	spec, _ := json.Marshal(map[string]any{"slug": strings.ToLower(name), "name": name, "roles": roles})
+	meta := map[string]any{"pf_intake": true, "dia_spec": string(spec), "pf_number": number}
+	for k, v := range extra {
+		meta[k] = v
+	}
+	raw, _ := json.Marshal(meta)
+	id := dbfx.Project(t, name+" "+f.tag)
+	dbfx.Issue(t, "Intake — "+name, testutil.Cols{"status": "done", "project_id": id, "number": f.number(), "metadata": string(raw)})
+	dbfx.Cleanup(t, `DELETE FROM issue WHERE project_id = $1`, id)
+	if posts != nil {
 		view, _ := json.Marshal(matasMemoryView{Slug: strings.ToLower(name), Number: number, Name: name, MulticaProject: id, Posts: posts})
-		if err := os.WriteFile(filepath.Join(dir, strings.ToLower(name)+".json"), view, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(f.dir, strings.ToLower(name)+".json"), view, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return id
 	}
+	return id
+}
+
+func (f *memoryFixture) issue(project, title, status string) {
+	cols := testutil.Cols{"status": status, "number": f.number()}
+	if project != "" {
+		cols["project_id"] = project
+	}
+	dbfx.Issue(f.t, title, cols)
+}
+
+func (f *memoryFixture) call(user, name string, args map[string]any) map[string]any {
+	t := f.t
+	t.Helper()
+	req := testutil.WithHeaders(testutil.JSONRequest("POST", "/api/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": name, "arguments": args}}), "Authorization", "Bearer mul_test", "X-User-ID", user, "X-Workspace-ID", testWorkspaceID)
+	var response struct {
+		Result map[string]any `json:"result"`
+	}
+	testutil.Call(t, testHandler.IncomingMCP, req).Want(200).JSON(&response)
+	if response.Result["isError"] == true {
+		t.Fatalf("%s: %v", name, response.Result["content"])
+	}
+	return response.Result["structuredContent"].(map[string]any)
+}
+
+// trailOf decodes a response's trail.
+func trailOf(t *testing.T, got map[string]any) matasTrail {
+	t.Helper()
+	raw, _ := json.Marshal(got["trail"])
+	var tr matasTrail
+	if err := json.Unmarshal(raw, &tr); err != nil || tr.InterpretedAs == nil || tr.Confidence == "" {
+		t.Fatalf("trail %s: %v", raw, err)
+	}
+	return tr
+}
+
+func TestIncomingMCPMemory(t *testing.T) {
+	f := newMemoryFixture(t)
+	tag := f.tag
+	po, poEmail := f.member("Petra")
+	outsider, _ := f.member("Otto")
+	full, summary := `{"mode":"full","at":"2026-11-20"}`, `{"mode":"summary","at":"2026-11-20"}`
+	project, call := f.project, f.call
+	dir := f.dir
 	post := func(prefix, id, kind, text string) matasMemoryPost {
 		return matasMemoryPost{ID: prefix + "/" + id, Type: kind, Text: text, SaidAt: "2026-11-20", Source: "MATA-1", Status: "recorded"}
 	}
@@ -162,19 +219,6 @@ func TestIncomingMCPMemory(t *testing.T) {
 	stray, _ := json.Marshal(matasMemoryView{Slug: "stray", MulticaProject: uuid.NewString(), Posts: []matasMemoryPost{post("x", "F-001", "fact", "Hosting fremmed.")}})
 	_ = os.WriteFile(filepath.Join(dir, "stray.json"), stray, 0o644)
 
-	call := func(user, name string, args map[string]any) map[string]any {
-		t.Helper()
-		req := testutil.WithHeaders(testutil.JSONRequest("POST", "/api/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-			"params": map[string]any{"name": name, "arguments": args}}), "Authorization", "Bearer mul_test", "X-User-ID", user, "X-Workspace-ID", testWorkspaceID)
-		var response struct {
-			Result map[string]any `json:"result"`
-		}
-		testutil.Call(t, testHandler.IncomingMCP, req).Want(200).JSON(&response)
-		if response.Result["isError"] == true {
-			t.Fatalf("%s: %v", name, response.Result["content"])
-		}
-		return response.Result["structuredContent"].(map[string]any)
-	}
 	numbers := func(list any, key string) string {
 		out := []string{}
 		for _, x := range list.([]any) {
@@ -209,6 +253,29 @@ func TestIncomingMCPMemory(t *testing.T) {
 		t.Fatalf("withheld leaks content or misses whom to ask: %s", b)
 	}
 
+	// Its trail uses the shared post and names the others by project, count and whom to ask only.
+	tr := trailOf(t, got)
+	used := []string{}
+	for _, u := range tr.Used {
+		used = append(used, u.ID)
+	}
+	if mine(strings.Join(used, " ")) != numB+"/F-001" || tr.Reviewed.Posts == 0 || len(tr.Reviewed.Sources) == 0 {
+		t.Fatalf("outsider trail used %v reviewed %+v", used, tr.Reviewed)
+	}
+	notShared := 0
+	for _, d := range tr.Discarded {
+		if d.Reason == matasDiscardNotShared && strings.Contains(fmt.Sprint(d.Project["number"]), tag) {
+			notShared++
+			if d.ID != "" || d.Matching != 1 {
+				t.Fatalf("not shared names a post: %+v", d)
+			}
+		}
+	}
+	if b, _ := json.Marshal(got["trail"]); notShared != 2 || strings.Contains(string(b), "Azure") || strings.Contains(string(b), "on-prem") ||
+		strings.Contains(string(b), "1000-9/") || strings.Contains(string(b), numC+"/") || !strings.Contains(string(b), "Product Owner: Petra") {
+		t.Fatalf("outsider trail leaks content or misses whom to ask: %s", b)
+	}
+
 	// The product owner of Alfa reads Alfa too, with the filters.
 	got = call(po, "multica_search_memory", map[string]any{"project_id": numA, "type": "decision", "view": "log", "query": "azure"})
 	if p := numbers(got["posts"], "post"); p != "1000-9/B-002 1000-9/B-001" {
@@ -216,6 +283,42 @@ func TestIncomingMCPMemory(t *testing.T) {
 	}
 	if got["posts_reviewed"] != float64(len(memoryPosts())) {
 		t.Fatalf("reviewed %v", got["posts_reviewed"])
+	}
+
+	// Its trail: the confirmed decision is used, the one it replaced is discarded as superseded.
+	tr = trailOf(t, got)
+	if len(tr.Used) != 1 || tr.Used[0].ID != "1000-9/B-002" || !strings.Contains(tr.Used[0].Why, "«azure»") || tr.Used[0].Source != "MATA-310" ||
+		len(tr.Discarded) != 1 || tr.Discarded[0].ID != "1000-9/B-001" || tr.Discarded[0].Reason != matasDiscardSuperseded ||
+		tr.Confidence != "high" || len(tr.Missing) != 0 || tr.InterpretedAs["project"].(map[string]any)["number"] != numA {
+		t.Fatalf("owner trail %+v", tr)
+	}
+	// The current memory leaves the superseded decision out, and the trail says so.
+	tr = trailOf(t, call(po, "multica_search_memory", map[string]any{"project_id": numA, "query": "azure"}))
+	if len(tr.Used) != 1 || len(tr.Discarded) != 1 || tr.Discarded[0].Note != "replaced by 1000-9/B-002" {
+		t.Fatalf("current trail %+v", tr)
+	}
+	// A proposal is no decision: discarded, and what is not settled is missing with whom to ask.
+	tr = trailOf(t, call(po, "multica_search_memory", map[string]any{"project_id": numA, "query": "capex"}))
+	if len(tr.Used) != 0 || len(tr.Discarded) != 1 || tr.Discarded[0].Reason != matasDiscardProposal || tr.Confidence != "low" ||
+		len(tr.Missing) != 1 || !strings.Contains(tr.Missing[0].What, "1000-9/B-003 is only a proposal") || tr.Missing[0].Ask != "Product Owner: Petra" {
+		t.Fatalf("proposal trail %+v", tr)
+	}
+	// Nothing found: low confidence and whom to ask.
+	tr = trailOf(t, call(po, "multica_search_memory", map[string]any{"project_id": numA, "query": "intet her"}))
+	if len(tr.Used) != 0 || len(tr.Discarded) != 0 || tr.Confidence != "low" || len(tr.Missing) != 1 || tr.Missing[0].Ask != "Product Owner: Petra" {
+		t.Fatalf("empty trail %+v", tr)
+	}
+	// A project number in the question decides the project; matches elsewhere are the wrong project.
+	got = call(po, "multica_search_memory", map[string]any{"query": numA + " hosting"})
+	tr = trailOf(t, got)
+	wrong := ""
+	for _, d := range tr.Discarded {
+		if d.Reason == matasDiscardWrongProject {
+			wrong += d.ID
+		}
+	}
+	if tr.InterpretedAs["project"].(map[string]any)["number"] != numA || tr.InterpretedAs["project_from"] == nil || wrong != numB+"/F-001" {
+		t.Fatalf("project from query: %+v", tr)
 	}
 
 	// The decision log follows the same rule.
@@ -227,6 +330,16 @@ func TestIncomingMCPMemory(t *testing.T) {
 	decisions := log["decisions"].([]any)
 	if len(decisions) != 1 || len(decisions[0].(map[string]any)["chain"].([]any)) != 1 {
 		t.Fatalf("owner log %v", log)
+	}
+
+	tr = trailOf(t, log)
+	if len(tr.Used) != 1 || tr.Used[0].ID != "1000-9/B-002" || len(tr.Discarded) != 2 || tr.Confidence != "medium" {
+		t.Fatalf("owner log trail %+v", tr)
+	}
+	tr = trailOf(t, call(outsider, "multica_decision_log", map[string]any{"project_id": a}))
+	if b, _ := json.Marshal(tr); len(tr.Used) != 0 || len(tr.Discarded) != 1 || tr.Discarded[0].Reason != matasDiscardNotShared ||
+		tr.Discarded[0].ID != "" || strings.Contains(string(b), "1000-9") || strings.Contains(string(b), "Azure") || tr.Missing[0].Ask != "Product Owner: Petra" {
+		t.Fatalf("outsider log trail %s", b)
 	}
 
 	// The project page reads it over REST.

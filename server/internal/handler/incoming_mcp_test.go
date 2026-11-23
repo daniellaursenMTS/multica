@@ -57,6 +57,28 @@ func TestIncomingMCPTransport(t *testing.T) {
 		}
 	}
 }
+func TestIncomingMCPInitializeInstructions(t *testing.T) {
+	req := incomingRequest(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25"}})
+	var response struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	testutil.Call(t, testHandler.IncomingMCP, req).Want(200).JSON(&response)
+	got := response.Result.Instructions
+	if got != incomingMCPInstructions {
+		t.Fatalf("initialize instructions = %q", got)
+	}
+	// Every client receives this on every connection; details belong in the tool descriptions.
+	if n := len([]rune(got)); n > 1500 {
+		t.Fatalf("instructions are %d characters, want at most 1500", n)
+	}
+	for _, boundary := range []string{"Multica is the source", "GDPR gate released", "has not shared it", "multica_propose_project_context", "A person decides"} {
+		if !strings.Contains(got, boundary) {
+			t.Errorf("instructions lack the boundary %q", boundary)
+		}
+	}
+}
 func TestIncomingMCPSubmissionRetryAndRouting(t *testing.T) {
 	runtimeID := dbfx.Runtime(t, "MCP intake fixture")
 	agentID := dbfx.Agent(t, "Orchestrator", runtimeID)

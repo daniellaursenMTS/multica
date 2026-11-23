@@ -22,6 +22,17 @@ import (
 
 const incomingMCPVersion = "2025-11-25"
 
+// incomingMCPInstructions is sent to every client on every connection, so it
+// carries the boundaries everyone shares and stays short; details belong in
+// the tool descriptions.
+const incomingMCPInstructions = "Matas' Multica workspace: projects and their diamonds of leaders, each project's context (goals, who decides what, which sources count), its typed memory (decisions, facts, risks, open questions; each with an id and a source), a synergy check for new ideas, what owners share, updates (screened by the GDPR gate), tasks for agents, and apps' token usage for the Capex page. Questions and tasks are answered asynchronously: poll multica_get_issue. Memory answers carry a trail (interpreted_as, reviewed, used, discarded, recommendation, confidence, missing): cite its ids and sources. Five read tools also offer a small view (MCP Apps) where the client supports it; their JSON is the same either way.\n\n" +
+	"Boundaries for every client:\n" +
+	"- Multica is the source. Answer from these tools, not from copies or your own knowledge, and name the project, id or issue each point rests on.\n" +
+	"- Only content the GDPR gate released or the owners wrote is here. People appear only by name and role in a diamond; risks concern projects, never individuals.\n" +
+	"- Never repeat content from a project that has not shared it (withheld, not_shared): give its name, number and owners, and who to ask.\n" +
+	"- Propose, don't change: a context change goes through multica_propose_project_context, anything else as a task. Use writing tools only when the person asks.\n" +
+	"- A person decides. A decision counts only when the role with the decision right has made it; submitting is not approval."
+
 func supportedIncomingMCPVersion(v string) bool {
 	return v == incomingMCPVersion || v == "2025-06-18" || v == "2025-03-26"
 }
@@ -104,7 +115,7 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 		if !supportedIncomingMCPVersion(version) {
 			version = incomingMCPVersion
 		}
-		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}, "resources": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.2.0"}, "instructions": "Matas' Multica workspace: projects and their diamonds of leaders, each project's context (goals, who decides what, which sources count), its typed memory (decisions with their chain, facts, risks, open questions; each with an id and a source), a synergy check for new ideas, what project owners share, updates to a project (screened by the GDPR gate), tasks for agents, and apps' token usage for the Capex page. Questions and tasks are answered asynchronously: poll multica_get_issue. Memory answers carry a trail (interpreted_as, reviewed, used, discarded, recommendation, confidence, missing): cite its ids and sources, and never describe a project listed as not shared. Five read tools also offer a small view (MCP Apps) where the client supports it; their JSON is the same either way. Submitting is not approval; a person decides when work is done."})
+		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}, "resources": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.2.0"}, "instructions": incomingMCPInstructions})
 	case "ping":
 		mcpRPCResult(w, msg.ID, map[string]any{})
 	case "tools/list":

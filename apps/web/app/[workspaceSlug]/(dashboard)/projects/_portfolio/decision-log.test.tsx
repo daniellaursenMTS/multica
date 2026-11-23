@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const mockApi = vi.hoisted(() => ({ getProjectDecisionLog: vi.fn() }));
+const mockApi = vi.hoisted(() => ({ getProjectDecisionLog: vi.fn(), confirmProjectDecision: vi.fn() }));
 
 vi.mock("@multica/core/api", () => ({ api: mockApi }));
 vi.mock("@multica/core/auth", () => ({ useAuthStore: () => null }));
@@ -68,6 +68,62 @@ describe("decision log", () => {
     expect(await screen.findByText(/ikke delt med dig/)).toBeTruthy();
     expect(screen.getByText(/Spørg Product Owner: Ina/)).toBeTruthy();
     expect(screen.queryByText("Gældende beslutninger")).toBeNull();
+  });
+
+  it("names who confirmed a decision on the project page", async () => {
+    const decision = { ...shared.decisions[0], confirmed_by: "bo", confirmed_by_user: "Kristian Rossing", confirmed_via: "project-page", confirmed_at: "2026-12-03" };
+    renderTab({ ...shared, decisions: [decision] });
+    expect(await screen.findByText(/Bekræftet af Kristian Rossing \(Business Owner\) 2026-12-03 på projektsiden/)).toBeTruthy();
+  });
+
+  const proposal = (extra: Record<string, unknown>) => ({ ...shared.proposals[0], rev: 1, ...extra });
+  const holder = { name: "Kristian Rossing", role: "bo", linked: true };
+
+  it("shows the buttons only to the one who holds the decision right", async () => {
+    renderTab({ ...shared, reviews: [], proposals: [
+      proposal({ id: "1000-9/B-003", holder, can_confirm: true }),
+      proposal({ id: "1000-9/B-004", text: "Et andet forslag.", holder, can_confirm: false }),
+      proposal({ id: "1000-9/B-005", text: "Et tredje forslag.", can_confirm: false,
+        holder: { linked: false, reason: "Kristian Rossing er ikke koblet til en Multica-bruger." } }),
+    ] });
+    expect(await screen.findAllByRole("button", { name: "Bekræft" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Ikke en beslutning" })).toHaveLength(1);
+    expect(screen.getByText("Kan bekræftes af Kristian Rossing (Business Owner).")).toBeTruthy();
+    expect(screen.getByText(/Ingen kan bekræfte forslaget endnu: Kristian Rossing er ikke koblet til en Multica-bruger/)).toBeTruthy();
+  });
+
+  it("confirms after asking, and shows the confirmation waiting for the sync", async () => {
+    renderTab({ ...shared, reviews: [], proposals: [proposal({ holder, can_confirm: true })] });
+    fireEvent.click(await screen.findByRole("button", { name: "Bekræft" }));
+    expect(mockApi.confirmProjectDecision).not.toHaveBeenCalled();
+    mockApi.confirmProjectDecision.mockResolvedValueOnce({ ...shared, reviews: [], proposals: [proposal({ holder, can_confirm: false,
+      confirmation: { action: "confirm", name: "Kristian Rossing", role: "bo", at: "2026-12-03T09:00:00Z", rev: 1, state: "pending" } })] });
+    fireEvent.click(screen.getByRole("button", { name: "Ja, bekræft" }));
+    expect(await screen.findByText(/Bekræftet af Kristian Rossing \(Business Owner\) 2026-12-03/)).toBeTruthy();
+    expect(screen.getByText(/opdateres ved næste sync/)).toBeTruthy();
+    expect(mockApi.confirmProjectDecision).toHaveBeenCalledWith("p1", { post: "1000-9/B-003", rev: 1, action: "confirm" });
+    expect(screen.queryByRole("button", { name: "Bekræft" })).toBeNull();
+  });
+
+  it("declines, and the proposal stays a proposal", async () => {
+    renderTab({ ...shared, reviews: [], proposals: [proposal({ holder, can_confirm: true })] });
+    fireEvent.click(await screen.findByRole("button", { name: "Ikke en beslutning" }));
+    mockApi.confirmProjectDecision.mockResolvedValueOnce({ ...shared, reviews: [], proposals: [proposal({ holder, can_confirm: false,
+      declined_by: "bo", declined_by_user: "Kristian Rossing", declined_at: "2026-12-03" })] });
+    fireEvent.click(screen.getByRole("button", { name: "Ja, ikke en beslutning" }));
+    expect(await screen.findByText("Ikke en beslutning ifølge Kristian Rossing (Business Owner) 2026-12-03.")).toBeTruthy();
+    expect(mockApi.confirmProjectDecision).toHaveBeenLastCalledWith("p1", { post: "1000-9/B-003", rev: 1, action: "decline" });
+    expect(screen.getByText("Capex-andelen beregnes i kroner.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Bekræft" })).toBeNull();
+  });
+
+  it("says so when the server refuses the answer", async () => {
+    renderTab({ ...shared, reviews: [], proposals: [proposal({ holder, can_confirm: true })] });
+    mockApi.getProjectDecisionLog.mockResolvedValueOnce({ ...shared, reviews: [], proposals: [proposal({ holder, can_confirm: true })] });
+    mockApi.confirmProjectDecision.mockRejectedValueOnce(new Error("1000-9/B-003 is at rev 2, not 1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Bekræft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ja, bekræft" }));
+    expect(await screen.findByText(/Svaret blev ikke gemt: 1000-9\/B-003 is at rev 2, not 1/)).toBeTruthy();
   });
 
   it("says so when the project has no memory yet", async () => {

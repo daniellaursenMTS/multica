@@ -144,6 +144,10 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, key+" is assigned by the server and cannot be set")
 		return
 	}
+	if matasMemConfirmReserved(key) {
+		writeError(w, http.StatusBadRequest, key+" is written by the server when the holder of the decision right answers on the project page; it cannot be set here")
+		return
+	}
 
 	var req SetIssueMetadataKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -233,6 +237,10 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	if matasNumberReserved(key) {
 		writeError(w, http.StatusBadRequest, key+" is assigned by the server and cannot be removed")
+		return
+	}
+	if matasMemConfirmReserved(key) {
+		writeError(w, http.StatusBadRequest, key+" records who confirmed a decision and cannot be removed")
 		return
 	}
 

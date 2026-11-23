@@ -40,7 +40,7 @@ func matasMCPTools() []any {
 	}
 	ro := map[string]any{"readOnlyHint": true, "openWorldHint": false}
 	rw := map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
-	return []any{
+	return append([]any{
 		map[string]any{"name": "multica_list_projects", "description": "List Matas projects: project number (Capex number and a sequence, e.g. 1004-2; only projects with a Capex have one), status, priority, dates, portfolio fields (WOF score etc.), the diamond's four roles with who holds them and whether each has updated recently, and what the owners share with Knowledge Hub.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_list_agents", "description": "List the agents a task can be given to, with what each does.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_project_summary", "description": "Get what a project's owners chose to share: their approved summary, or a note that the whole project hub is shared (then use multica_ask_project) or that nothing is shared.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID or project number (e.g. 1004-2) from multica_list_projects.")}), "annotations": ro},
@@ -50,7 +50,7 @@ func matasMCPTools() []any {
 		map[string]any{"name": "multica_project_context", "description": "Get a project's context before acting on it: goals, priorities, milestones, who decides what per area (business, product, platform, technical, steerco), the sources that count and similar-looking ones that do not, known risks to watch for and the project's own terms, plus its diamond. stale is true when nobody has changed it for 30 days. Pass project_id \"portfolio\" for the portfolio's context.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID, project number (e.g. 1004-2), or \"portfolio\".")}), "annotations": ro},
 		map[string]any{"name": "multica_propose_project_context", "description": "Propose a change to a project's context, e.g. a new Teams channel seen in three updates. Agents never edit the context; this creates a task in review for the project's product owner, who decides. Poll multica_get_issue for its status.", "inputSchema": obj([]string{"request_id", "project_id", "field", "proposal", "why"}, map[string]any{"request_id": str("Stable UUID for this proposal; reuse it to retry."), "project_id": str("Project UUID or project number, e.g. 1004-2."), "field": map[string]any{"type": "string", "enum": matasContextFields, "description": "The context field the change is about."}, "proposal": str("What should change, 1–2000 characters."), "why": str("Why, with where it was seen, 1–2000 characters.")}), "annotations": rw},
 		matasUsageTool(),
-	}
+	}, matasMemoryTools(str, obj, ro)...)
 }
 
 // matasIntakes returns each project's intake issue metadata (pf_intake), keyed by project.

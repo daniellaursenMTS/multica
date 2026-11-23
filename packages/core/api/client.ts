@@ -3580,6 +3580,11 @@ export class ApiClient {
     return this.fetch(`/api/projects/${id}`);
   }
 
+  /** Matas: a project's decision log from its typed memory. The page parses the shape it shows. */
+  async getProjectDecisionLog(id: string): Promise<unknown> {
+    return this.fetch(`/api/projects/${id}/decision-log`);
+  }
+
   async createProject(data: CreateProjectRequest): Promise<Project> {
     return this.fetch("/api/projects", {
       method: "POST",

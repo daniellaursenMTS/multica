@@ -803,5 +803,6 @@ func matasMemoryTools(str func(string) map[string]any, obj func([]string, map[st
 		map[string]any{"name": "multica_decision_log", "description": "A project's decision log: the decisions that hold, each with the chain of decisions it replaced, the role that took it, when and its source; proposals waiting for whoever holds the decision right; posts awaiting review. Only for projects whose memory you may read; otherwise it says whom to ask. trail shows the decisions used, the superseded ones and proposals discarded, and what is not settled.", "inputSchema": obj([]string{"project_id"}, map[string]any{
 			"project_id": str("Project UUID or project number, e.g. 1004-2."),
 		}), "annotations": ro},
+		matasSynergyTool(str, obj, ro),
 	}
 }

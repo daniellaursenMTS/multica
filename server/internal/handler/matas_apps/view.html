@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="da" data-view="__MATAS_VIEW__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matas Multica</title>
+<!--
+  MCP App view for matas-multica (MATA-284). One page, five views: projects, context, memory,
+  decisions, synergy. The tool result is first turned into plain components (MODELS: data only),
+  then drawn (draw*: DOM only), so the components can later be written as A2UI without touching
+  the data side. Loads nothing from outside; every value is set as text, never as HTML.
+-->
+<style>
+  :root {
+    --paper: #F7F5EF; --ink: #12233A; --petrol: #17726C; --amber: #E8B04A;
+    --bg: var(--paper); --surface: #FFFFFF; --text: var(--ink); --muted: #5B6676;
+    --line: #E2DDD0; --accent: var(--petrol); --accent-soft: #E3F0EE; --warn-soft: #FBF0D9;
+    --warn-text: #7A5200; --ok: #2E7D4F;
+    --sans: var(--font-sans, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+    --display: "Space Grotesk", var(--sans);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E1A2B; --surface: #16263C; --text: var(--paper); --muted: #A9B3C1;
+    --line: #2A3B54; --accent: #4FB3AA; --accent-soft: #173A3D; --warn-soft: #3A2F17;
+    --warn-text: #F2C76B; --ok: #6BC28F;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  main { padding: 16px; max-width: 980px; }
+  h1 { font: 600 20px/1.2 var(--display); margin: 2px 0 4px; letter-spacing: -0.01em; }
+  h2 { font: 600 13px/1.3 var(--display); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 600; }
+  .sub { color: var(--muted); margin: 0 0 10px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 10px 0; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .stat b { display: block; font: 600 22px/1.1 var(--display); }
+  .stat.act b { color: var(--warn-text); }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .chip { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip.static { cursor: default; }
+  .chip small { opacity: 0.75; margin-left: 4px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .faded { opacity: 0.62; }
+  .card .top { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .tag { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+  .tag.warn { color: var(--warn-text); }
+  .card p { margin: 6px 0; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .id { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11.5px; border-bottom: 1px dotted var(--muted); cursor: help; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .col h3 { font: 600 14px/1.3 var(--display); margin: 0 0 2px; }
+  .col .cards { grid-template-columns: 1fr; }
+  .empty { color: var(--muted); font-style: italic; font-size: 13px; }
+  .notice { border-radius: 10px; padding: 8px 12px; margin: 8px 0; background: var(--accent-soft); }
+  .notice.warn { background: var(--warn-soft); color: var(--warn-text); }
+  .notice.ok { border-left: 3px solid var(--ok); background: transparent; padding-left: 10px; }
+  .chain { list-style: none; margin: 8px 0 0; padding: 0; }
+  .chain li { position: relative; padding: 0 0 6px 18px; font-size: 13px; color: var(--muted); }
+  .chain li::before { content: ""; position: absolute; left: 5px; top: 7px; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); }
+  .chain li::after { content: ""; position: absolute; left: 8.5px; top: 16px; bottom: -2px; border-left: 1.5px dashed var(--line); }
+  .chain li:last-child::after { display: none; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  td.nr { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  a { color: var(--accent); }
+  button.act, a.act { font: inherit; font-size: 12.5px; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 8px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+  button.act.primary { background: var(--accent); color: #fff; }
+  :root[data-theme="dark"] button.act.primary, :root[data-theme="dark"] .chip[aria-pressed="true"] { color: #0E1A2B; }
+  button.act:focus-visible, .chip:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+  input.filter { width: 100%; max-width: 320px; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); margin: 4px 0 8px; }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; }
+  ul.plain, ol.plain { margin: 0; padding-left: 18px; }
+  details.trail { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; }
+  details.trail summary { cursor: pointer; color: var(--muted); }
+  details.trail ul { margin: 6px 0; padding-left: 18px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--muted); vertical-align: 1px; }
+  .dot.ok { background: var(--ok); } .dot.due { background: var(--amber); } .dot.late { background: #C2452D; }
+  .hidden { display: none !important; }
+  @media (max-width: 520px) { main { padding: 12px; } th.opt, td.opt { display: none; } }
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite"><p class="sub">Henter …</p></main>
+<script>
+(() => {
+  "use strict";
+  const VIEW = document.documentElement.dataset.view;
+  const app = document.getElementById("app");
+
+  // ---- words -------------------------------------------------------------------------------
+  const TYPE = { decision: "Beslutning", fact: "Fakta", risk: "Risiko", constraint: "Begrænsning", question: "Åbent spørgsmål", preference: "Præference", event: "Hændelse" };
+  const STATUS = { proposal: "Forslag (ikke besluttet)", decision: "Besluttet", confirmed: "Bekræftet", superseded: "Erstattet", recorded: "Registreret",
+    planned: "Planlagt", in_progress: "I gang", completed: "Afsluttet", cancelled: "Annulleret", paused: "På pause", backlog: "Backlog",
+    todo: "Todo", in_review: "Til review", done: "Færdig", blocked: "Blokeret" };
+  const ROLE = { bo: "Business Owner", po: "Product Owner", plo: "Platform Owner", to: "Technical Owner" };
+  const AREA = { business: "Forretning", product: "Produkt", platform: "Platform", technical: "Teknik", steerco: "Styregruppe" };
+  const REASON = { superseded: "erstattet", proposal: "kun et forslag", wrong_project: "andet projekt", not_shared: "ikke delt med dig" };
+  const CONF = { low: "lav", medium: "middel", high: "høj" };
+  const roles = (s) => (s || "").split(/\s+/).filter(Boolean).map((r) => ROLE[r] || r).join(", ");
+  const day = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ""); return m ? `${+m[3]}.${+m[2]}.${m[1]}` : (s || ""); };
+  const proj = (p) => (p ? [p.number, p.title].filter(Boolean).join(" ") : "");
+  const idTip = (id, type) => { const m = /^(.+)\/([A-Z]+-\d+)$/.exec(id || ""); return m ? `${TYPE[type] || "Post"} ${m[2]} i projekt ${m[1]}. Id'et peger på posten i hukommelsen og dens kilde.` : `Issue ${id} i Multica`; };
+
+  // ---- models: tool result -> components (data only) -----------------------------------------
+  const trailOf = (d) => ({ c: "trail", trail: d.trail || null });
+  const postCard = (p, extra = {}) => ({
+    tag: TYPE[p.type] || p.type, warn: p.status === "proposal", id: p.id, type: p.type, date: day(p.said_at),
+    text: p.text, meta: [STATUS[p.status] || p.status, roles(p.speaker_role) && `sagt af ${roles(p.speaker_role)}`, p.area && (AREA[p.area] || p.area)].filter(Boolean).join(" · "),
+    source: [p.source, p.hub_note].filter(Boolean).join(" · "), key: p.type, ...extra });
+
+  const MODELS = {
+    projects(d, mode) {
+      const rows = (d.projects || []).filter((p) => p.status !== "cancelled").map((p) => ({
+        number: p.number || "", title: p.title, status: STATUS[p.status] || p.status, team: (p.fields && p.fields.team) || "",
+        search: `${p.number || ""} ${p.title} ${(p.fields && p.fields.team) || ""}`.toLowerCase(),
+        action: mode === "pick"
+          ? { kind: "tool", label: "Vælg", name: "multica_project_context", args: { project_id: p.number || p.id }, view: "context" }
+          : { kind: "message", label: "Vælg projekt", text: `Brug projekt ${proj(p) || p.id}.` } }));
+      return [
+        { c: "header", eyebrow: "Projekter", title: "Hvilket projekt gælder det?", sub: `${rows.length} projekter. Vælg ét, så bruger Claude det i resten af samtalen.` },
+        { c: "picker", rows },
+      ];
+    },
+    context(d) {
+      const c = d.context || {};
+      const out = [{ c: "header", eyebrow: d.scope === "portfolio" ? "Porteføljen" : "Projektkontekst", title: d.scope === "portfolio" ? "Porteføljens kontekst" : proj(d.project), sub: c.updated_at ? `Senest ændret ${day(c.updated_at)}${c.updated_by ? " af " + c.updated_by : ""}` : "" }];
+      if (d.stale) out.push({ c: "notice", tone: "warn", text: `Konteksten er ikke ændret i ${d.days_since_update} dage og kan være forældet.` });
+      if (d.note) out.push({ c: "notice", text: d.note });
+      if (d.project) out.push({ c: "actions", items: [
+        { kind: "message", label: "Beslutningslog", text: `Vis beslutningsloggen for ${proj(d.project)}.`, primary: true },
+        { kind: "message", label: "Søg i hukommelsen", text: `Hvad ved vi om ${proj(d.project)}? Søg i hukommelsen.` },
+        { kind: "tool", label: "Skift projekt", name: "multica_list_projects", args: {}, view: "projects", mode: "pick" } ] });
+      const list = (title, items, ordered) => items && items.length > 0 && out.push({ c: "section", title, children: [{ c: "list", items, ordered }] });
+      list("Mål", c.goals);
+      list("Prioriteter", c.priorities, true);
+      if (c.milestones && c.milestones.length) out.push({ c: "section", title: "Milepæle", children: [{ c: "facts", rows: c.milestones.map((m) => [day(m.date), m.what]) }] });
+      if (c.decision_rights && Object.keys(c.decision_rights).length) out.push({ c: "section", title: "Hvem afgør hvad", children: [{ c: "facts", rows: Object.entries(c.decision_rights).map(([a, who]) => [AREA[a] || a, who]) }] });
+      if (d.diamond) out.push({ c: "section", title: "Diamanten", children: [{ c: "facts", rows: Object.entries(d.diamond).map(([r, v]) => [ROLE[r] || r, (v && v.person) || "ledig"]) }] });
+      list("Hold øje med", c.watch_for);
+      if (c.sources && c.sources.length) out.push({ c: "section", title: "Kilder, der tæller", children: [{ c: "links", items: c.sources }] });
+      if (c.not_sources && c.not_sources.length) out.push({ c: "section", title: "Ikke kilder", children: [{ c: "links", items: c.not_sources, muted: true }] });
+      if (c.terms && c.terms.length) out.push({ c: "section", title: "Projektets ord", children: [{ c: "facts", rows: c.terms.map((t) => [t.term, t.meaning]) }] });
+      return out;
+    },
+    memory(d) {
+      const posts = (d.posts || []).map((x) => ({ ...x.post, project: x.project }));
+      const many = (d.searched_projects || []).length > 1;
+      const counts = {};
+      posts.forEach((p) => { counts[p.type] = (counts[p.type] || 0) + 1; });
+      const q = d.interpreted_as || {};
+      const scope = q.project ? `projekt ${q.project}` : many ? `${d.searched_projects.length} projekter` : proj((d.searched_projects || [])[0]);
+      const out = [
+        { c: "header", eyebrow: "Projekthukommelse", title: q.query ? `«${q.query}»` : "Det, der gælder nu", sub: `${posts.length} af ${d.matches ?? posts.length} poster vist · ${d.posts_reviewed ?? 0} gennemgået · ${scope}${q.view === "log" ? " · hele loggen" : ""}` },
+        { c: "chips", filter: true, items: Object.keys(TYPE).filter((t) => counts[t]).map((t) => ({ key: t, label: TYPE[t], count: counts[t] })) },
+        { c: "cards", items: posts.map((p) => postCard(p, { faded: p.status === "superseded", project: many ? proj(p.project) : "" })), empty: "Ingen poster matchede." },
+      ];
+      (d.withheld || []).forEach((w) => out.push({ c: "notice", tone: "warn", text: `${proj(w.project)}: ${w.matching_posts ?? w.matching} fund, som ikke er delt med dig. Spørg ${w.ask}.` }));
+      out.push(trailOf(d));
+      return out;
+    },
+    decisions(d) {
+      const out = [{ c: "header", eyebrow: "Beslutningslog", title: proj(d.project), sub: d.generated_at ? `Hukommelsen er opdateret ${day(d.generated_at)}` : "" }];
+      if (d.shared === false) {
+        out.push({ c: "notice", tone: "warn", text: `${d.note} Spørg ${d.ask}.` });
+        out.push(trailOf(d));
+        return out;
+      }
+      if (d.note) out.push({ c: "notice", text: d.note });
+      const missing = ((d.trail && d.trail.missing) || []);
+      const waitsOn = (id) => { const m = missing.find((x) => (x.what || "").startsWith(id + " ")); return m ? m.ask : ""; };
+      const dec = d.decisions || [], props = d.proposals || [], revs = d.reviews || [];
+      out.push({ c: "stats", items: [
+        { value: dec.length, label: "gældende beslutninger" },
+        { value: props.length, label: props.length ? "forslag venter på en beslutning" : "forslag venter", act: props.length > 0 },
+        { value: revs.length, label: revs.length ? "poster skal afklares" : "til afklaring", act: revs.length > 0 } ] });
+      out.push({ c: "section", title: "Det, der gælder", children: [{ c: "cards", one: true, empty: "Ingen beslutninger endnu.",
+        items: dec.map((p) => postCard(p, { chain: (p.chain || []).map((o) => ({ id: o.id, type: o.type, text: o.text, date: day(o.said_at) })) })) }] });
+      out.push({ c: "section", title: "Forslag, der venter", children: props.length
+        ? [{ c: "cards", items: props.map((p) => postCard(p, { waits: waitsOn(p.id) })) }]
+        : [{ c: "notice", tone: "ok", text: "Ingen forslag venter." }] });
+      if (revs.length) out.push({ c: "section", title: "Til afklaring", children: [{ c: "cards", items: revs.map((p) => postCard(p, { waits: p.review })) }] });
+      out.push(trailOf(d));
+      return out;
+    },
+    synergy(d) {
+      const q = d.interpreted_as || {};
+      const item = (it) => ({ tag: it.kind === "issue" ? "Opgave" : (TYPE[it.type] || it.type), id: it.id, type: it.type, date: day(it.date), text: it.text,
+        meta: [STATUS[it.status] || it.status, proj(it.project)].filter(Boolean).join(" · "), source: it.source || "", matched: it.matched || [] });
+      const col = (title, sub, items) => ({ title, sub, cards: (items || []).map(item) });
+      const need = /at least (\d+)/.exec(q.matching || "");
+      const rule = need ? `Et fund tæller, når det indeholder mindst ${need[1]} af ordene.` : "";
+      const out = [
+        { c: "header", eyebrow: "Synergitjek", title: `«${q.idea || ""}»`, sub: [q.project && `Idéen hører til ${proj(q.project)}.`, rule, "Tjekket matcher på ord, ikke på betydning."].filter(Boolean).join(" ") },
+        { c: "chips", items: (q.terms || []).map((t) => ({ label: t })) },
+        { c: "columns", cols: [
+          col("Lavet før", "Lukkede opgaver, hændelser og fakta", d.done_before),
+          col("I gang nu", "Åbne opgaver, risici og spørgsmål", d.in_progress),
+          col("Besluttet", "Beslutninger, begrænsninger og præferencer", d.decided) ] },
+        { c: "section", title: `Anbefaling · sikkerhed ${CONF[d.confidence] || d.confidence || "?"}`, children: [{ c: "notice", text: d.recommendation || "" }] },
+      ];
+      if ((d.related_projects || []).length) out.push({ c: "section", title: "Projekter med samme ord i konteksten", children: [{ c: "list", items: d.related_projects.map((r) => `${proj(r.project)} (${(r.matched || []).join(", ")}). Spørg ${r.ask}.`) }] });
+      (d.withheld || []).forEach((w) => out.push({ c: "notice", tone: "warn", text: `${proj(w.project)}: ${w.matching} fund, som ikke er delt med dig. Spørg ${w.ask}.` }));
+      out.push(trailOf(d));
+      return out;
+    },
+  };
+
+  // ---- drawing: components -> DOM (no data rules here) ---------------------------------------
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === "on") Object.entries(v).forEach(([ev, fn]) => el.addEventListener(ev, fn));
+      else if (k === "class") el.className = v;
+      else el.setAttribute(k, v === true ? "" : String(v));
+    }
+    for (const kid of kids.flat(Infinity)) if (kid !== undefined && kid !== null && kid !== false && kid !== "") el.append(kid instanceof Node ? kid : String(kid));
+    return el;
+  }
+  const idEl = (id, type) => (id ? h("span", { class: "id", title: idTip(id, type), tabindex: 0 }, id) : "");
+  const actionButton = (a) => h("button", { class: "act" + (a.primary ? " primary" : ""), type: "button", on: { click: () => act(a) } }, a.label);
+
+  function drawCard(it) {
+    return h("article", { class: "card" + (it.faded ? " faded" : ""), "data-key": it.key },
+      h("div", { class: "top" }, h("span", { class: "tag" + (it.warn ? " warn" : "") }, it.tag), idEl(it.id, it.type), it.date && h("span", {}, it.date), it.project && h("span", {}, it.project)),
+      h("p", {}, it.text),
+      it.meta && h("div", { class: "meta" }, it.meta),
+      it.waits && h("div", { class: "meta" }, "Venter på: " + it.waits),
+      it.source && h("div", { class: "meta" }, "Kilde: " + it.source),
+      it.matched && it.matched.length > 0 && h("div", { class: "chips" }, it.matched.map((m) => h("span", { class: "chip static" }, m))),
+      it.chain && it.chain.length > 0 && h("div", {}, h("div", { class: "meta" }, "Erstattede:"),
+        h("ol", { class: "chain" }, it.chain.map((o) => h("li", {}, idEl(o.id, o.type), " ", o.date, " · ", o.text)))));
+  }
+
+  const DRAW = {
+    header: (c) => h("header", {}, h("div", { class: "eyebrow" }, c.eyebrow), h("h1", {}, c.title), c.sub && h("p", { class: "sub" }, c.sub)),
+    notice: (c) => h("div", { class: "notice" + (c.tone ? " " + c.tone : ""), role: c.tone === "warn" ? "note" : null }, c.text),
+    stats: (c) => h("div", { class: "stats" }, c.items.map((s) => h("div", { class: "stat" + (s.act ? " act" : "") }, h("b", {}, s.value), h("span", {}, s.label)))),
+    list: (c) => h(c.ordered ? "ol" : "ul", { class: "plain" }, c.items.map((x) => h("li", {}, x))),
+    facts: (c) => h("dl", { class: "facts" }, c.rows.map(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
+    actions: (c) => h("div", { class: "actions" }, c.items.map(actionButton)),
+    section: (c) => h("section", {}, h("h2", {}, c.title), c.children.map(draw)),
+    links: (c) => h("ul", { class: "plain" }, c.items.map((s) => h("li", { class: c.muted ? "meta" : null },
+      s.url && !c.muted ? h("a", { href: s.url, on: { click: (e) => { e.preventDefault(); request("ui/open-link", { url: s.url }).catch(() => {}); } } }, s.name) : s.name, s.type ? ` (${s.type})` : ""))),
+    cards: (c) => c.items.length ? h("div", { class: "cards", style: c.one ? "grid-template-columns:1fr" : null }, c.items.map(drawCard)) : h("p", { class: "empty" }, c.empty || "Ingen."),
+    columns: (c) => h("div", { class: "cols" }, c.cols.map((col) => h("section", { class: "col" }, h("h3", {}, `${col.title} (${col.cards.length})`), h("p", { class: "meta" }, col.sub),
+      col.cards.length ? h("div", { class: "cards" }, col.cards.map(drawCard)) : h("p", { class: "empty" }, "Intet fundet.")))),
+    chips(c) {
+      if (!c.items.length) return "";
+      const wrap = h("div", { class: "chips", role: c.filter ? "group" : null, "aria-label": c.filter ? "Filtrér efter type" : null });
+      c.items.forEach((it) => wrap.append(c.filter
+        ? h("button", { class: "chip", type: "button", "aria-pressed": "false", on: { click: (e) => filterCards(e.currentTarget, it.key) } }, it.label, h("small", {}, it.count))
+        : h("span", { class: "chip static" }, it.label)));
+      return wrap;
+    },
+    picker(c) {
+      const body = h("tbody", {}, c.rows.map((r) => h("tr", { "data-search": r.search },
+        h("td", { class: "nr" }, r.number), h("td", {}, h("div", {}, r.title), h("div", { class: "meta" }, r.status)), h("td", { class: "opt" }, r.team), h("td", {}, actionButton(r.action)))));
+      const filter = h("input", { class: "filter", type: "search", placeholder: "Søg på nummer, navn eller team", "aria-label": "Søg i projekterne",
+        on: { input: (e) => { const q = e.target.value.toLowerCase().trim(); body.querySelectorAll("tr").forEach((tr) => tr.classList.toggle("hidden", q !== "" && !tr.dataset.search.includes(q))); } } });
+      return h("div", {}, filter, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Nr."), h("th", {}, "Projekt"), h("th", { class: "opt" }, "Team"), h("th", {}, ""))), body));
+    },
+    trail(c) {
+      const t = c.trail;
+      if (!t) return "";
+      const r = t.reviewed || {};
+      const summary = `Spor: sikkerhed ${CONF[t.confidence] || t.confidence || "?"} · ${r.posts ?? 0} poster${r.issues != null ? ` og ${r.issues} opgaver` : ""} gennemgået · ${(t.used || []).length} brugt · ${(t.discarded || []).length} fravalgt`;
+      const missing = t.missing || [];
+      return h("div", {},
+        missing.length > 0 && h("section", {}, h("h2", {}, "Huller"), h("ul", { class: "plain" }, missing.map((m) => h("li", {}, m.what, m.ask ? h("span", { class: "meta" }, ` — spørg ${m.ask}`) : "")))),
+        h("details", { class: "trail" }, h("summary", {}, summary),
+          t.recommendation && h("p", {}, t.recommendation),
+          (t.used || []).length > 0 && h("div", {}, h("b", {}, "Brugt"), h("ul", {}, t.used.map((u) => h("li", {}, idEl(u.id), " ", u.why, h("span", { class: "meta" }, ` · ${u.source}`))))),
+          (t.discarded || []).length > 0 && h("div", { class: "faded" }, h("b", {}, "Fravalgt"), h("ul", {}, t.discarded.map((x) => h("li", { class: "meta" }, x.id ? idEl(x.id) : proj(x.project), ` — ${REASON[x.reason] || x.reason}${x.note ? ": " + x.note : ""}`)))),
+          (r.sources || []).length > 0 && h("div", { class: "meta" }, "Kilder gennemgået: " + r.sources.map((s) => `${s.kind} ${proj(s.project)} (${s.count})`).join(", "))));
+    },
+  };
+  const draw = (c) => (DRAW[c.c] ? DRAW[c.c](c) : "");
+
+  function filterCards(button, key) {
+    const on = button.getAttribute("aria-pressed") !== "true";
+    button.parentElement.querySelectorAll(".chip").forEach((b) => b.setAttribute("aria-pressed", "false"));
+    button.setAttribute("aria-pressed", String(on));
+    app.querySelectorAll(".card[data-key]").forEach((card) => card.classList.toggle("hidden", on && card.dataset.key !== key));
+  }
+
+  let shown = false;
+  function show(view, data, mode) {
+    shown = true;
+    app.replaceChildren(...(MODELS[view] ? MODELS[view](data, mode) : []).map(draw).filter(Boolean));
+  }
+  function showError(text) { app.replaceChildren(h("div", { class: "notice warn" }, text)); }
+
+  // ---- host bridge (MCP Apps, postMessage JSON-RPC) ------------------------------------------
+  let nextId = 1;
+  const pending = new Map();
+  const post = (msg) => window.parent.postMessage(msg, "*");
+  function request(method, params) {
+    const id = nextId++;
+    post({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      setTimeout(() => { if (pending.delete(id)) reject(new Error("timeout")); }, 30000);
+    });
+  }
+  const notify = (method, params) => post({ jsonrpc: "2.0", method, params });
+
+  function resultData(r) {
+    if (!r) return null;
+    if (r.isError) throw new Error(((r.content || [])[0] || {}).text || "Værktøjet gav en fejl.");
+    if (r.structuredContent) return r.structuredContent;
+    const text = ((r.content || []).find((x) => x.type === "text") || {}).text;
+    return text ? JSON.parse(text) : null;
+  }
+
+  async function act(a) {
+    if (a.kind === "message") {
+      try { await request("ui/message", { role: "user", content: [{ type: "text", text: a.text }] }); }
+      catch { app.prepend(h("div", { class: "notice" }, `Skriv i chatten: «${a.text}»`)); }
+      return;
+    }
+    try {
+      const data = resultData(await request("tools/call", { name: a.name, arguments: a.args }));
+      show(a.view, data, a.mode);
+      if (a.view === "context" && data && data.project) {
+        request("ui/update-model-context", { content: [{ type: "text", text: `Brugeren valgte projekt ${proj(data.project)} (${data.project.id}) i projektvælgeren.` }] }).catch(() => {});
+      }
+    } catch (e) { showError(String(e.message || e)); }
+  }
+
+  function applyContext(ctx) {
+    if (!ctx) return;
+    if (ctx.theme) document.documentElement.dataset.theme = ctx.theme;
+    const vars = ctx.styles && ctx.styles.variables;
+    if (vars && vars["--font-sans"]) document.documentElement.style.setProperty("--font-sans", vars["--font-sans"]);
+  }
+
+  window.addEventListener("message", (e) => {
+    if (e.source !== window.parent) return;
+    const m = e.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (!m.method && m.id != null && pending.has(m.id)) {
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      m.error ? p.reject(new Error(m.error.message || "fejl")) : p.resolve(m.result);
+      return;
+    }
+    switch (m.method) {
+      case "ui/notifications/tool-result":
+        try { show(VIEW, resultData(m.params)); } catch (err) { showError(String(err.message || err)); }
+        break;
+      case "ui/notifications/tool-cancelled":
+        showError("Kaldet blev afbrudt.");
+        break;
+      case "ui/notifications/host-context-changed":
+        applyContext(m.params);
+        break;
+      case "ui/resource-teardown":
+      case "ping":
+        if (m.id != null) post({ jsonrpc: "2.0", id: m.id, result: {} });
+        break;
+    }
+  });
+
+  if (!document.documentElement.dataset.theme && window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+  new ResizeObserver(() => notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight })).observe(document.body);
+  request("ui/initialize", { appInfo: { name: "matas-multica-views", version: "1.0.0" }, appCapabilities: { availableDisplayModes: ["inline"] }, protocolVersion: "2026-01-26" })
+    .then((r) => { applyContext(r && r.hostContext); notify("ui/notifications/initialized", {}); })
+    .catch(() => { if (!shown) app.replaceChildren(h("p", { class: "sub" }, "Visningen kræver en klient med MCP Apps. Svaret står som JSON i samtalen.")); });
+})();
+</script>
+</body>
+</html>

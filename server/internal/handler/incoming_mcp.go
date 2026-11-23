@@ -104,7 +104,7 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 		if !supportedIncomingMCPVersion(version) {
 			version = incomingMCPVersion
 		}
-		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.1.0"}, "instructions": "Matas' Multica workspace: projects and their diamonds of leaders, each project's context (goals, who decides what, which sources count), its typed memory (decisions with their chain, facts, risks, open questions; each with an id and a source), what project owners share, updates to a project (screened by the GDPR gate), tasks for agents, and apps' token usage for the Capex page. Questions and tasks are answered asynchronously: poll multica_get_issue. Submitting is not approval; a person decides when work is done."})
+		mcpRPCResult(w, msg.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "matas-multica", "version": "1.1.0"}, "instructions": "Matas' Multica workspace: projects and their diamonds of leaders, each project's context (goals, who decides what, which sources count), its typed memory (decisions with their chain, facts, risks, open questions; each with an id and a source), a synergy check for new ideas, what project owners share, updates to a project (screened by the GDPR gate), tasks for agents, and apps' token usage for the Capex page. Questions and tasks are answered asynchronously: poll multica_get_issue. Memory answers carry a trail (interpreted_as, reviewed, used, discarded, recommendation, confidence, missing): cite its ids and sources, and never describe a project listed as not shared. Submitting is not approval; a person decides when work is done."})
 	case "ping":
 		mcpRPCResult(w, msg.ID, map[string]any{})
 	case "tools/list":
@@ -147,6 +147,8 @@ func (h *Handler) IncomingMCP(w http.ResponseWriter, r *http.Request) {
 			result, err = h.mcpSearchMemory(r, p.Arguments)
 		case "multica_decision_log":
 			result, err = h.mcpDecisionLog(r, p.Arguments)
+		case "multica_synergy_check":
+			result, err = h.mcpSynergyCheck(r, p.Arguments)
 		default:
 			mcpRPCError(w, msg.ID, -32602, "unknown tool")
 			return

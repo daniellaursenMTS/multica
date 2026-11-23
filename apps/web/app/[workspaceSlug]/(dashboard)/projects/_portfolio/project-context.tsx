@@ -16,6 +16,8 @@ import type { Row } from "./portfolio";
 // updated_at/updated_by and only lets the diamond's owners and workspace admins write it (the
 // portfolio: admins only). sync_diamonds.py copies it to roster.json and the hub's README and
 // marks `ctx_synced` with the updated_at it applied. Agents propose changes as tasks in review.
+// «Lav udkast» (MATA-266) fills the form's empty fields from what Multica can derive, with a source
+// per value and the questions only the owners can answer; nothing is saved until they press Gem.
 
 export const AREAS = [
   ["business", "Forretning"], ["product", "Produkt"], ["platform", "Platform"], ["technical", "Teknik"], ["steerco", "Styregruppe"],
@@ -80,6 +82,50 @@ export function contextAge(c: ProjectContext | null, now = new Date()): { days: 
   if (Number.isNaN(at)) return { days: null, stale: false };
   const days = Math.floor((now.getTime() - at) / 86_400_000);
   return { days, stale: days >= STALE_DAYS };
+}
+
+/** A draft from Multica (GET /api/projects/{id}/context-draft): what it could derive, each value
+ * with its source, what stays empty and why, and the questions only the owners can answer. */
+export interface ContextDraft {
+  draft: ProjectContext;
+  sources: { field: string; value: string; source: string }[];
+  empty: { field: string; why: string }[];
+  questions: { field: string; text: string; hints?: string[] }[];
+  left_out: { field: string; value: string; source: string }[];
+}
+
+export function parseDraft(raw: unknown): ContextDraft | null {
+  const d = raw as Partial<ContextDraft> | null;
+  if (!d || typeof d !== "object" || !d.draft || !Array.isArray(d.draft.goals)) return null;
+  return {
+    draft: { ...empty(), ...d.draft }, sources: d.sources ?? [], empty: d.empty ?? [], questions: d.questions ?? [], left_out: d.left_out ?? [],
+  };
+}
+
+/** The draft fills only what the form has empty; what the owners wrote is kept. */
+export function mergeDraft(current: ProjectContext | null, draft: ProjectContext): ProjectContext {
+  const c = { ...empty(), ...(current ?? {}) };
+  const pick = <T,>(mine: T[], theirs: T[]) => (mine.length ? mine : theirs);
+  const rights = { ...draft.decision_rights };
+  for (const [k, v] of Object.entries(c.decision_rights)) if (v?.trim()) rights[k as Area] = v;
+  return {
+    ...c, goals: pick(c.goals, draft.goals), priorities: pick(c.priorities, draft.priorities), milestones: pick(c.milestones, draft.milestones),
+    decision_rights: rights, sources: pick(c.sources, draft.sources), not_sources: pick(c.not_sources, draft.not_sources),
+    watch_for: pick(c.watch_for, draft.watch_for), terms: pick(c.terms, draft.terms),
+    ...(draft.owner !== undefined ? { owner: c.owner?.trim() ? c.owner : draft.owner } : {}),
+  };
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  goals: "Mål", priorities: "Prioriteter", milestones: "Milepæle", decision_rights: "Beslutningsret", sources: "Kilder",
+  not_sources: "Ikke kilder", watch_for: "Hold øje med", terms: "Termer", owner: "Ejer",
+};
+
+/** «decision_rights.business» → «Beslutningsret, Forretning»; «sources[2]» → «Kilder». */
+export function fieldLabel(field: string): string {
+  const [base, rest] = field.split(/[.[]/, 2);
+  const area = field.startsWith("decision_rights.") ? AREAS.find(([k]) => k === rest)?.[1] : undefined;
+  return (FIELD_LABELS[base ?? ""] ?? field) + (area ? `, ${area}` : "");
 }
 
 /** Who may edit a project's context; the server checks the same. */
@@ -184,12 +230,18 @@ export function ContextView({ ctx, portfolio = false }: { ctx: ProjectContext; p
   );
 }
 
+/** «krævet», «vigtigt» or «valgfrit» after a field's name. */
+function Tag({ tag }: { tag?: string }) {
+  if (!tag) return null;
+  return <span className={`ml-1.5 text-xs font-normal ${tag === "valgfrit" ? "text-muted-foreground" : "text-[#CF022D]"}`}>{tag}</span>;
+}
+
 /** One text per line, at most `max` lines. */
-function Lines({ id, label, value, max, onChange, hint }: { id: string; label: string; value: string[]; max: number; onChange: (v: string[]) => void; hint?: string }) {
+function Lines({ id, label, tag, value, max, onChange, hint }: { id: string; label: string; tag?: string; value: string[]; max: number; onChange: (v: string[]) => void; hint?: string }) {
   const rows = [...value, ...Array(Math.max(0, max - value.length)).fill("")].slice(0, max);
   return (
     <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1 text-sm font-medium">{label}</legend>
+      <legend className="mb-1 text-sm font-medium">{label}<Tag tag={tag} /></legend>
       {rows.map((v, i) => (
         <input key={i} id={`${id}-${i}`} value={v} aria-label={`${label} ${i + 1}`} className={input}
           onChange={(e) => onChange(rows.map((x, j) => (j === i ? e.target.value : x)))} />
@@ -199,11 +251,11 @@ function Lines({ id, label, value, max, onChange, hint }: { id: string; label: s
   );
 }
 
-function SourceRows({ label, value, onChange, linkRequired }: { label: string; value: Source[]; onChange: (v: Source[]) => void; linkRequired: boolean }) {
+function SourceRows({ label, tag, value, onChange, linkRequired }: { label: string; tag?: string; value: Source[]; onChange: (v: Source[]) => void; linkRequired: boolean }) {
   const set = (i: number, patch: Partial<Source>) => onChange(value.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   return (
     <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1 text-sm font-medium">{label}</legend>
+      <legend className="mb-1 text-sm font-medium">{label}<Tag tag={tag} /></legend>
       {value.map((s, i) => (
         <div key={i} className="grid gap-2 sm:grid-cols-[10rem_1fr_1fr_auto]">
           <select value={s.type} onChange={(e) => set(i, { type: e.target.value as SourceType })} aria-label={`${label} ${i + 1}, type`} className={input}>
@@ -220,9 +272,42 @@ function SourceRows({ label, value, onChange, linkRequired }: { label: string; v
   );
 }
 
-export function ContextForm({ initial, portfolio = false, onSave, onCancel, saving, error }: {
+/** What the draft filled in and from where, and what only the owners can answer. */
+function DraftNotes({ draft }: { draft: ContextDraft }) {
+  return (
+    <section className="flex flex-col gap-3 rounded-md border border-dashed px-3 py-2 text-sm" aria-label="Udkast fra Multica">
+      <p className="text-muted-foreground">
+        Udkast fra det, Multica ved om projektet. Intet er gemt. Ret det, der er forkert, svar på spørgsmålene, og tryk Gem.
+        Felter, der ikke kunne udledes, står tomme.
+      </p>
+      {draft.sources.length > 0 && (
+        <div>
+          <h3 className="font-medium">Udfyldt, med kilde</h3>
+          <ul className="list-disc pl-5">
+            {draft.sources.map((s, i) => <li key={i}><span className="text-muted-foreground">{fieldLabel(s.field)}:</span> {s.value} <span className="text-muted-foreground">— {s.source}</span></li>)}
+          </ul>
+        </div>
+      )}
+      {draft.questions.length > 0 && (
+        <div>
+          <h3 className="font-medium">Det kan kun I svare på</h3>
+          <ul className="list-disc pl-5">
+            {draft.questions.map((q, i) => (
+              <li key={i}>{q.text}{q.hints?.length ? <span className="block text-xs text-muted-foreground">{q.hints.join(" · ")}</span> : null}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {draft.left_out.length > 0 && (
+        <p className="text-xs text-muted-foreground">Ikke taget med, fordi det står i porteføljekonteksten: {draft.left_out.map((x) => x.value).join("; ")}</p>
+      )}
+    </section>
+  );
+}
+
+export function ContextForm({ initial, portfolio = false, onSave, onCancel, saving, error, draft }: {
   initial: ProjectContext | null; portfolio?: boolean; saving: boolean; error: Error | null;
-  onSave: (c: ProjectContext) => void; onCancel: () => void;
+  onSave: (c: ProjectContext) => void; onCancel: () => void; draft?: ContextDraft | null;
 }) {
   const [c, setC] = useState<ProjectContext>(() => ({ ...empty(), ...(portfolio ? { owner: "" } : {}), ...(initial ?? {}) }));
   const put = <K extends keyof ProjectContext>(k: K, v: ProjectContext[K]) => setC((x) => ({ ...x, [k]: v }));
@@ -230,6 +315,8 @@ export function ContextForm({ initial, portfolio = false, onSave, onCancel, savi
   const problem = contextProblem(clean);
   return (
     <form className="flex flex-col gap-5 rounded-lg border p-4" onSubmit={(e) => { e.preventDefault(); if (!problem) onSave(clean); }}>
+      {draft && <DraftNotes draft={draft} />}
+      <p className="text-xs text-muted-foreground">Kun mål er krævet. Mål, beslutningsret og kilder er det vigtigste for agenterne; resten må gerne stå tomt.</p>
       {portfolio && (
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Ejer af porteføljen</span>
@@ -237,11 +324,11 @@ export function ContextForm({ initial, portfolio = false, onSave, onCancel, savi
         </label>
       )}
       <div className="grid gap-5 md:grid-cols-2">
-        <Lines id="ctx-goal" label="Mål" value={c.goals} max={3} onChange={(v) => put("goals", v)} hint="1–3 mål for perioden, én sætning hver." />
-        <Lines id="ctx-priority" label="Prioriteter" value={c.priorities} max={3} onChange={(v) => put("priorities", v)} hint="Top 3 lige nu, vigtigste først." />
+        <Lines id="ctx-goal" label="Mål" tag="krævet" value={c.goals} max={3} onChange={(v) => put("goals", v)} hint="1–3 mål for perioden, én sætning hver." />
+        <Lines id="ctx-priority" label="Prioriteter" tag="valgfrit" value={c.priorities} max={3} onChange={(v) => put("priorities", v)} hint="Top 3 lige nu, vigtigste først." />
       </div>
       <fieldset className="flex flex-col gap-1.5">
-        <legend className="mb-1 text-sm font-medium">Milepæle</legend>
+        <legend className="mb-1 text-sm font-medium">Milepæle<Tag tag="valgfrit" /></legend>
         {c.milestones.map((m, i) => (
           <div key={i} className="grid gap-2 sm:grid-cols-[11rem_1fr_auto]">
             <input type="date" value={m.date} aria-label={`Milepæl ${i + 1}, dato`} className={input}
@@ -254,7 +341,7 @@ export function ContextForm({ initial, portfolio = false, onSave, onCancel, savi
         <button type="button" className={`${linkBtn} self-start`} onClick={() => put("milestones", [...c.milestones, { date: "", what: "" }])}>+ Tilføj milepæl</button>
       </fieldset>
       <fieldset className="flex flex-col gap-1.5">
-        <legend className="mb-1 text-sm font-medium">Beslutningsret: hvem afgør hvad</legend>
+        <legend className="mb-1 text-sm font-medium">Beslutningsret: hvem afgør hvad<Tag tag="vigtigt" /></legend>
         {AREAS.map(([k, label]) => (
           <label key={k} className="grid gap-2 text-sm sm:grid-cols-[10rem_1fr] sm:items-center">
             <span className="text-muted-foreground">{label}</span>
@@ -263,10 +350,10 @@ export function ContextForm({ initial, portfolio = false, onSave, onCancel, savi
           </label>
         ))}
       </fieldset>
-      <SourceRows label="Kilder" value={c.sources} linkRequired onChange={(v) => put("sources", v)} />
-      <SourceRows label="Ikke kilder (lignende navne, der ikke hører til)" value={c.not_sources} linkRequired={false} onChange={(v) => put("not_sources", v)} />
+      <SourceRows label="Kilder" tag="vigtigt" value={c.sources} linkRequired onChange={(v) => put("sources", v)} />
+      <SourceRows label="Ikke kilder (lignende navne, der ikke hører til)" tag="valgfrit" value={c.not_sources} linkRequired={false} onChange={(v) => put("not_sources", v)} />
       <fieldset className="flex flex-col gap-1.5">
-        <legend className="mb-1 text-sm font-medium">Hold øje med</legend>
+        <legend className="mb-1 text-sm font-medium">Hold øje med<Tag tag="valgfrit" /></legend>
         {c.watch_for.map((w, i) => (
           <div key={i} className="grid gap-2 sm:grid-cols-[1fr_auto]">
             <input value={w} aria-label={`Hold øje med ${i + 1}`} className={input}
@@ -280,7 +367,7 @@ export function ContextForm({ initial, portfolio = false, onSave, onCancel, savi
         <span className="text-xs text-muted-foreground">Kendte risikoområder, fx «estimater er ofte for optimistiske».</span>
       </fieldset>
       <fieldset className="flex flex-col gap-1.5">
-        <legend className="mb-1 text-sm font-medium">Termer</legend>
+        <legend className="mb-1 text-sm font-medium">Termer<Tag tag="valgfrit" /></legend>
         {c.terms.map((t, i) => (
           <div key={i} className="grid gap-2 sm:grid-cols-[12rem_1fr_auto]">
             <input value={t.term} placeholder="Ord eller forkortelse" aria-label={`Term ${i + 1}`} className={input}
@@ -345,8 +432,13 @@ export function ContextTab({ row, me }: { row: Row; me: string | null }) {
   const email = useAuthStore((s) => s.user?.email ?? null);
   const admin = useIsAdmin();
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<ContextDraft | null>(null);
   const meta: IssueMetadata | undefined = row.intake_meta;
   const ctx = parseContext(meta?.ctx_spec);
+  const makeDraft = useMutation({
+    mutationFn: async () => parseDraft(await api.getProjectContextDraft(row.multica_project ?? "")),
+    onSuccess: (d) => { setDraft(d); setEditing(true); },
+  });
   const mayEdit = !!row.multica_project && canEditContext(row, { me, email, admin });
   const save = useMutation({
     mutationFn: async (c: ProjectContext) => {
@@ -358,7 +450,7 @@ export function ContextTab({ row, me }: { row: Row; me: string | null }) {
       }
       await api.setIssueMetadataKey(intake, "ctx_spec", JSON.stringify(c));
     },
-    onSuccess: () => { setEditing(false); qc.invalidateQueries({ queryKey: ["portfolio", "live"] }); },
+    onSuccess: () => { setEditing(false); setDraft(null); qc.invalidateQueries({ queryKey: ["portfolio", "live"] }); },
   });
 
   return (
@@ -369,7 +461,8 @@ export function ContextTab({ row, me }: { row: Row; me: string | null }) {
       </p>
       {row.multica_project && <Proposals projectId={row.multica_project} />}
       {editing ? (
-        <ContextForm initial={ctx} saving={save.isPending} error={save.error as Error | null} onSave={(c) => save.mutate(c)} onCancel={() => setEditing(false)} />
+        <ContextForm initial={draft ? mergeDraft(ctx, draft.draft) : ctx} draft={draft} saving={save.isPending} error={save.error as Error | null}
+          onSave={(c) => save.mutate(c)} onCancel={() => { setEditing(false); setDraft(null); }} />
       ) : ctx ? (
         <>
           <Updated ctx={ctx} synced={meta?.ctx_synced} error={meta?.ctx_sync_error} />
@@ -379,7 +472,16 @@ export function ContextTab({ row, me }: { row: Row; me: string | null }) {
         <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">Projektet har ingen kontekst endnu.</p>
       )}
       {!editing && (mayEdit ? (
-        <button type="button" className={`${btn} self-start`} onClick={() => setEditing(true)}>{ctx ? "Ret kontekst" : "Skriv kontekst"}</button>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex gap-2">
+            <button type="button" className={btn} onClick={() => setEditing(true)}>{ctx ? "Ret kontekst" : "Skriv kontekst"}</button>
+            <button type="button" className={btn} disabled={makeDraft.isPending} onClick={() => makeDraft.mutate()}>
+              {makeDraft.isPending ? "Laver udkast …" : "Lav udkast"}
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">«Lav udkast» udfylder de tomme felter ud fra diamanten, projektets ressourcer og hukommelse, med kilde på hvert felt. Du retter og gemmer selv.</p>
+          {makeDraft.error && <p className="text-sm text-[#CF022D]">Kunne ikke lave udkast: {(makeDraft.error as Error).message}</p>}
+        </div>
       ) : (
         <p className="text-xs text-muted-foreground">Kun projektets diamant (Business, Product, Platform og Technical Owner) og workspace-admins kan rette konteksten.</p>
       ))}
@@ -393,6 +495,11 @@ export function PortfolioContext() {
   const workspace = useCurrentWorkspace();
   const admin = useIsAdmin();
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<ContextDraft | null>(null);
+  const makeDraft = useMutation({
+    mutationFn: async () => parseDraft(await api.getProjectContextDraft("portfolio")),
+    onSuccess: (d) => { setDraft(d); setEditing(true); },
+  });
   const { data: issues, isLoading } = useQuery({
     queryKey: ["portfolio", "context", workspace?.id],
     enabled: !!workspace?.id,
@@ -410,7 +517,7 @@ export function PortfolioContext() {
       }
       await api.setIssueMetadataKey(id, "ctx_spec", JSON.stringify(c));
     },
-    onSuccess: () => { setEditing(false); qc.invalidateQueries({ queryKey: ["portfolio", "context"] }); },
+    onSuccess: () => { setEditing(false); setDraft(null); qc.invalidateQueries({ queryKey: ["portfolio", "context"] }); },
   });
   if (isLoading) return <div className="h-32 animate-pulse rounded-lg bg-muted" aria-label="Henter porteføljekontekst" />;
   if ((issues?.length ?? 0) > 1) return <p role="alert" className="text-sm text-[#CF022D]">Porteføljekonteksten ligger på mere end ét issue. En admin må rydde op.</p>;
@@ -421,7 +528,8 @@ export function PortfolioContext() {
         projekternes egen kontekst.
       </p>
       {editing ? (
-        <ContextForm initial={ctx} portfolio saving={save.isPending} error={save.error as Error | null} onSave={(c) => save.mutate(c)} onCancel={() => setEditing(false)} />
+        <ContextForm initial={draft ? mergeDraft(ctx, draft.draft) : ctx} draft={draft} portfolio saving={save.isPending} error={save.error as Error | null}
+          onSave={(c) => save.mutate(c)} onCancel={() => { setEditing(false); setDraft(null); }} />
       ) : ctx ? (
         <>
           {issue && <Updated ctx={ctx} synced={issue.metadata.ctx_synced} error={issue.metadata.ctx_sync_error} />}
@@ -431,7 +539,16 @@ export function PortfolioContext() {
         <p className="rounded-md border border-dashed px-4 py-3 text-sm text-muted-foreground">Porteføljen har ingen kontekst endnu.</p>
       )}
       {!editing && (admin ? (
-        <button type="button" className={`${btn} self-start`} onClick={() => setEditing(true)}>{ctx ? "Ret porteføljekontekst" : "Skriv porteføljekontekst"}</button>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex gap-2">
+            <button type="button" className={btn} onClick={() => setEditing(true)}>{ctx ? "Ret porteføljekontekst" : "Skriv porteføljekontekst"}</button>
+            <button type="button" className={btn} disabled={makeDraft.isPending} onClick={() => makeDraft.mutate()}>
+              {makeDraft.isPending ? "Laver udkast …" : "Lav udkast"}
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">«Lav udkast» foreslår de termer og risici, der gælder alle projekter, med kilde. Det, der står her, gentages ikke i projekternes kontekst.</p>
+          {makeDraft.error && <p className="text-sm text-[#CF022D]">Kunne ikke lave udkast: {(makeDraft.error as Error).message}</p>}
+        </div>
       ) : (
         <p className="text-xs text-muted-foreground">Kun workspace-admins kan rette porteføljekonteksten.</p>
       ))}

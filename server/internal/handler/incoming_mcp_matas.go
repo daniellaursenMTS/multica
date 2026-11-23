@@ -45,12 +45,13 @@ func matasMCPTools() []any {
 		map[string]any{"name": "multica_list_agents", "description": "List the agents a task can be given to, with what each does.", "inputSchema": obj([]string{}, map[string]any{}), "annotations": ro},
 		map[string]any{"name": "multica_project_summary", "description": "Get what a project's owners chose to share: their approved summary, or a note that the whole project hub is shared (then use multica_ask_project) or that nothing is shared.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID or project number (e.g. 1004-2) from multica_list_projects.")}), "annotations": ro},
 		map[string]any{"name": "multica_ask_project", "description": "Ask the Knowledge Hub agent a question. It answers from Matas' own sources and from projects only as far as their owners share them. Asynchronous: poll multica_get_issue with the returned id; the answer appears there as `answer` within a few minutes.", "inputSchema": obj([]string{"request_id", "question"}, map[string]any{"request_id": str("Stable UUID for this question; reuse it to retry."), "question": str("The question, 1–4000 characters."), "project_id": str("Optional project the question is about: its UUID or its project number, e.g. 1004-2.")}), "annotations": rw},
-		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID or project number (e.g. 1004-2); the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today.")}), "annotations": rw},
+		map[string]any{"name": "multica_add_project_update", "description": "Send an update about a project (a status, decision, risk) from someone in its diamond. It is screened by the GDPR gate before anything reaches the project hub, exactly like the project page's Add update.", "inputSchema": obj([]string{"request_id", "project_id", "speaker", "text"}, map[string]any{"request_id": str("Stable UUID for this update; reuse it to retry."), "project_id": str("Project UUID or project number (e.g. 1004-2); the project must have a diamond."), "speaker": str("Who gave the update, as named in the project's diamond."), "text": str("The update, 1–20000 characters."), "date": str("Day the update was given, YYYY-MM-DD; default today."), "source": map[string]any{"type": "string", "enum": []string{"mcp", "interview"}, "description": "interview when the update comes from an interview (multica_interview_brief) the person approved; default mcp. Hub-skriver records it as the posts' origin."}}), "annotations": rw},
 		map[string]any{"name": "multica_create_task", "description": "Create a task in a project and give it to an agent (see multica_list_agents). Poll multica_get_issue for status; the agent's latest reply appears as `answer`.", "inputSchema": obj([]string{"request_id", "project_id", "title", "agent"}, map[string]any{"request_id": str("Stable UUID for this task; reuse it to retry."), "project_id": str("Project UUID or project number, e.g. 1004-2."), "title": str("Task title, 1–200 characters."), "description": str("What to do, the background and what done looks like."), "agent": str("Agent name or UUID."), "start": map[string]any{"type": "boolean", "description": "Start the agent now (default true). False parks the task in backlog."}}), "annotations": rw},
 		map[string]any{"name": "multica_project_context", "description": "Get a project's context before acting on it: goals, priorities, milestones, who decides what per area (business, product, platform, technical, steerco), the sources that count and similar-looking ones that do not, known risks to watch for and the project's own terms, plus its diamond. stale is true when nobody has changed it for 30 days. Pass project_id \"portfolio\" for the portfolio's context.", "inputSchema": obj([]string{"project_id"}, map[string]any{"project_id": str("Project UUID, project number (e.g. 1004-2), or \"portfolio\".")}), "annotations": ro},
 		map[string]any{"name": "multica_propose_project_context", "description": "Propose a change to a project's context, e.g. a new Teams channel seen in three updates. Agents never edit the context; this creates a task in review for the project's product owner, who decides. Poll multica_get_issue for its status.", "inputSchema": obj([]string{"request_id", "project_id", "field", "proposal", "why"}, map[string]any{"request_id": str("Stable UUID for this proposal; reuse it to retry."), "project_id": str("Project UUID or project number, e.g. 1004-2."), "field": map[string]any{"type": "string", "enum": matasContextFields, "description": "The context field the change is about."}, "proposal": str("What should change, 1–2000 characters."), "why": str("Why, with where it was seen, 1–2000 characters.")}), "annotations": rw},
 		matasUsageTool(),
-	}, matasMemoryTools(str, obj, ro)...)
+		matasInterviewTool(str, obj, ro),
+	}, append(matasMemoryTools(str, obj, ro), matasContextDraftTools(str, obj, ro)...)...)
 }
 
 // matasIntakes returns each project's intake issue metadata (pf_intake), keyed by project.
@@ -339,9 +340,17 @@ func (h *Handler) mcpAddProjectUpdate(r *http.Request, raw json.RawMessage) (any
 		Speaker   string `json:"speaker"`
 		Text      string `json:"text"`
 		Date      string `json:"date"`
+		Source    string `json:"source"`
 	}
 	if err := decodeMCPArguments(raw, &p); err != nil {
 		return nil, err
+	}
+	source := strings.TrimSpace(p.Source)
+	if source == "" {
+		source = "mcp"
+	}
+	if source != "mcp" && source != "interview" {
+		return nil, errors.New("source must be mcp or interview")
 	}
 	speaker := strings.TrimSpace(p.Speaker)
 	text := strings.TrimSpace(p.Text)
@@ -384,8 +393,13 @@ func (h *Handler) mcpAddProjectUpdate(r *http.Request, raw json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	body := "Projekt: " + spec.Name + " · Taler: " + speaker + " · Dato: " + day + "\n\n" + text + "\n"
-	meta := map[string]json.RawMessage{"intake_source": json.RawMessage(`"opus_mcp"`), "gdpr_review_only": json.RawMessage(`true`), "note_source": json.RawMessage(`"mcp"`)}
+	header := "Projekt: " + spec.Name + " · Taler: " + speaker + " · Dato: " + day
+	if source == "interview" {
+		header += " · Kilde: interview"
+	}
+	body := header + "\n\n" + text + "\n"
+	meta := map[string]json.RawMessage{"intake_source": json.RawMessage(`"opus_mcp"`), "gdpr_review_only": json.RawMessage(`true`)}
+	meta["note_source"], _ = json.Marshal(source)
 	meta["intake_request_id"], _ = json.Marshal(p.RequestID)
 	name := matasNumbered(metaString(intakes[util.UUIDToString(project.ID)], matasNumberKey), spec.Name)
 	return h.matasCreate(r, p.RequestID, "Opdatering: "+name+" — "+speaker+", "+day, body, project.ID, agent, "todo", meta)

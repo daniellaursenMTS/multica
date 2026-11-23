@@ -1979,6 +1979,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/resources", h.ListProjectResources)
 					r.Get("/decision-log", h.GetProjectDecisionLog)
 					r.Post("/decision-log/confirm", h.ConfirmProjectDecision)
+					r.Get("/context-draft", h.GetProjectContextDraft)
 					r.Post("/resources", h.CreateProjectResource)
 					r.Put("/resources/{resourceId}", h.UpdateProjectResource)
 					r.Delete("/resources/{resourceId}", h.DeleteProjectResource)

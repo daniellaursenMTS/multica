@@ -6,6 +6,7 @@ const mockApi = vi.hoisted(() => ({
   createIssue: vi.fn(),
   listIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
   setIssueMetadataKey: vi.fn().mockResolvedValue(undefined),
+  getProjectContextDraft: vi.fn(),
 }));
 const members = vi.hoisted(() => ({ list: [] as { user_id: string; role: string }[] }));
 
@@ -25,7 +26,7 @@ vi.mock("@multica/views/navigation", () => ({
   AppLink: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
 }));
 
-import { canEditContext, contextAge, contextProblem, ContextTab, parseContext, type ProjectContext } from "./project-context";
+import { canEditContext, contextAge, contextProblem, ContextTab, fieldLabel, mergeDraft, parseContext, parseDraft, type ProjectContext } from "./project-context";
 import type { Row } from "./portfolio";
 
 const base: ProjectContext = {
@@ -87,6 +88,25 @@ describe("project context fields", () => {
   });
 });
 
+describe("context draft", () => {
+  it("fills only what is empty and keeps what the owners wrote", () => {
+    const draft: ProjectContext = { ...base, goals: [], decision_rights: { technical: "Tobias (Technical Owner)", business: "Bent (Business Owner)" },
+      sources: [{ type: "repo", name: "x/alfa", url: "https://github.com/x/alfa" }], watch_for: ["IT kan trække ud."] };
+    const merged = mergeDraft({ ...base, decision_rights: { business: "Styregruppen" } }, draft);
+    expect(merged.goals).toEqual(["Kortere svartid"]);
+    expect(merged.decision_rights).toEqual({ business: "Styregruppen", technical: "Tobias (Technical Owner)" });
+    expect(merged.sources).toHaveLength(1);
+    expect(mergeDraft(null, draft).goals).toEqual([]);
+  });
+
+  it("names fields in Danish and reads only a draft", () => {
+    expect(fieldLabel("decision_rights.business")).toBe("Beslutningsret, Forretning");
+    expect(fieldLabel("sources[2]")).toBe("Kilder");
+    expect(parseDraft({ nope: 1 })).toBeNull();
+    expect(parseDraft({ draft: { goals: [] } })?.questions).toEqual([]);
+  });
+});
+
 describe("ContextTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,6 +131,32 @@ describe("ContextTab", () => {
     const saved = JSON.parse(value);
     expect(saved.goals).toEqual(["Kortere svartid", "Færre fejl"]);
     expect(saved.updated_at).toBeUndefined(); // the server sets who and when
+  });
+
+  it("«Lav udkast» fills the form with sources and questions, and saves only on Gem", async () => {
+    mockApi.getProjectContextDraft.mockResolvedValue({
+      draft: { goals: [], priorities: [], milestones: [], decision_rights: { product: "Petra (Product Owner)" }, sources: [], not_sources: [], watch_for: ["IT-godkendelsen kan trække ud."], terms: [] },
+      sources: [{ field: "decision_rights.product", value: "Petra (Product Owner)", source: "diamanten: Product Owner er Petra" },
+        { field: "watch_for[1]", value: "IT-godkendelsen kan trække ud.", source: "1-1/R-001 (MATA-1)" }],
+      empty: [{ field: "goals", why: "Mål kan ikke udledes" }],
+      questions: [{ field: "goals", text: "Hvad er projektets 1–3 mål for perioden, én sætning hver?", hints: ["Projektbeskrivelsen i Multica: Pilot"] }],
+      left_out: [],
+    });
+    renderWithQuery(<ContextTab row={row()} me="Petra" />);
+    fireEvent.click(screen.getByRole("button", { name: "Lav udkast" }));
+    expect(await screen.findByText(/diamanten: Product Owner er Petra/)).toBeTruthy();
+    expect(screen.getByText(/Hvad er projektets 1–3 mål/)).toBeTruthy();
+    expect(mockApi.getProjectContextDraft).toHaveBeenCalledWith("p1");
+    expect((screen.getByLabelText("Hold øje med 1") as HTMLInputElement).value).toBe("IT-godkendelsen kan trække ud.");
+    expect(mockApi.setIssueMetadataKey).not.toHaveBeenCalled();
+    // Goals are required: nothing can be saved before the owner writes one.
+    expect((screen.getByRole("button", { name: "Gem kontekst" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Mål 1"), { target: { value: "Kortere svartid" } });
+    fireEvent.click(screen.getByRole("button", { name: "Gem kontekst" }));
+    await waitFor(() => expect(mockApi.setIssueMetadataKey).toHaveBeenCalled());
+    const saved = JSON.parse(mockApi.setIssueMetadataKey.mock.calls[0]![2]);
+    expect(saved.decision_rights).toEqual({ product: "Petra (Product Owner)" });
+    expect(saved.watch_for).toEqual(["IT-godkendelsen kan trække ud."]);
   });
 
   it("does not offer editing to someone outside the diamond", () => {

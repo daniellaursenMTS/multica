@@ -194,6 +194,17 @@ func TestMatasProjectNumbers(t *testing.T) {
 	if pid, title, _ := issueOf(ok(incomingCall(t, "multica_add_project_update", map[string]any{"request_id": uuid.NewString(), "project_id": " 1004-1 ", "speaker": "Anna", "text": "Klar til test."}))); pid != alpha || !strings.HasPrefix(title, "Opdatering: [1004-1] Alpha — Anna") {
 		t.Fatalf("update: %s %q", pid, title)
 	}
+	// An update from an interview says so in its header and in note_source, so Hub-skriver records
+	// origin «interview»; any other source is refused.
+	interview := ok(incomingCall(t, "multica_add_project_update", map[string]any{"request_id": uuid.NewString(), "project_id": "1004-1", "speaker": "Anna", "text": "Fra interviewet.", "source": "interview"}))
+	var noteSource string
+	dbfx.QueryRow(t, `SELECT metadata->>'note_source' FROM issue WHERE id = $1`, interview["id"]).Scan(&noteSource)
+	if _, _, text := issueOf(interview); noteSource != "interview" || !strings.Contains(text, " · Kilde: interview\n\nFra interviewet.") {
+		t.Fatalf("interview update %s %q", noteSource, text)
+	}
+	if result := incomingCall(t, "multica_add_project_update", map[string]any{"request_id": uuid.NewString(), "project_id": "1004-1", "speaker": "Anna", "text": "x", "source": "mail"}); result["isError"] != true {
+		t.Fatal("source mail accepted")
+	}
 	for ref, want := range map[string]string{"1004-99": "no project has project number 1004-99", "Alpha": "project UUID or a project number"} {
 		result := incomingCall(t, "multica_add_project_update", map[string]any{"request_id": uuid.NewString(), "project_id": ref, "speaker": "Anna", "text": "x"})
 		if result["isError"] != true || !strings.Contains(fmt.Sprint(result["content"]), want) {

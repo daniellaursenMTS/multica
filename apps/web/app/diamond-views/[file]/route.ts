@@ -26,19 +26,19 @@ function authSeen(req: NextRequest): string {
 async function signedIn(req: NextRequest): Promise<boolean> {
   const api = process.env.REMOTE_API_URL;
   // The web app signs in with the session cookie or, in token mode, a bearer token; accept either.
-  // Cookies are read through Next's cookie store as well as the raw header: proxy.ts rewrites the
-  // request headers, and the raw header has been seen missing here while /api requests had it.
-  const fromStore = req.cookies.getAll().map((c) => `${c.name}=${c.value}`).join("; ");
-  const cookie = req.headers.get("cookie") || fromStore;
+  // Only the auth cookie is forwarded: other cookies on localhost (dev tools, other apps) can hold
+  // characters that fetch refuses in a header, which made every check fail before it was sent.
+  const session = req.cookies.get("multica_auth")?.value;
   const authorization = req.headers.get("authorization");
-  if (!api || (!cookie && !authorization?.startsWith("Bearer "))) return false;
   const headers: Record<string, string> = {};
-  if (cookie) headers.cookie = cookie;
+  if (session) headers.cookie = `multica_auth=${session}`;
   if (authorization?.startsWith("Bearer ")) headers.authorization = authorization;
+  if (!api || !Object.keys(headers).length) return false;
   try {
     const res = await fetch(`${api}/api/me`, { headers, cache: "no-store" });
     return res.ok;
-  } catch {
+  } catch (error) {
+    console.error("diamond-views: auth check failed:", error instanceof Error ? error.message.slice(0, 200) : "unknown error");
     return false;
   }
 }

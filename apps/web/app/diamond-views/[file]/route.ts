@@ -18,10 +18,15 @@ const FILE = /^[a-z0-9-]+\.(svg|json)$/;
 
 async function signedIn(req: Request): Promise<boolean> {
   const api = process.env.REMOTE_API_URL;
+  // The web app signs in with the session cookie or, in token mode, a bearer token; accept either.
   const cookie = req.headers.get("cookie");
-  if (!api || !cookie) return false;
+  const authorization = req.headers.get("authorization");
+  if (!api || (!cookie && !authorization?.startsWith("Bearer "))) return false;
+  const headers: Record<string, string> = {};
+  if (cookie) headers.cookie = cookie;
+  if (authorization?.startsWith("Bearer ")) headers.authorization = authorization;
   try {
-    const res = await fetch(`${api}/api/me`, { headers: { cookie }, cache: "no-store" });
+    const res = await fetch(`${api}/api/me`, { headers, cache: "no-store" });
     return res.ok;
   } catch {
     return false;

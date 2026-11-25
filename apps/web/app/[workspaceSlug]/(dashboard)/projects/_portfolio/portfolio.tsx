@@ -86,7 +86,14 @@ export function useText(url: string | null) {
     let live = true;
     setText(null);
     setError(null);
-    fetch(url, { cache: "no-store", credentials: "include" })
+    // In token mode the app keeps its token in localStorage and sends no auth cookie.
+    let token: string | null = null;
+    try {
+      token = window.localStorage.getItem("multica_token");
+    } catch {
+      token = null;
+    }
+    fetch(url, { cache: "no-store", credentials: "include", headers: token ? { Authorization: `Bearer ${token}` } : undefined })
       .then(async (r) => (r.ok ? r.text() : Promise.reject(new Error(await r.text()))))
       .then((t) => live && setText(t))
       .catch((e: Error) => live && setError(e.message || "Kunne ikke hente data."));

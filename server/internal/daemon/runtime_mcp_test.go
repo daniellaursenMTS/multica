@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -115,7 +116,7 @@ func TestListRuntimeLocalMcpServersUnknownProvider(t *testing.T) {
 
 func TestMergeRuntimeAndAgentMcpConfigOmpUsesAgentConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	merged, err := mergeRuntimeAndAgentMcpConfig("omp", json.RawMessage(`{"mcpServers":{"agent":{"command":"agent-server"}}}`))
+	merged, _, err := mergeRuntimeAndAgentMcpConfig("omp", json.RawMessage(`{"mcpServers":{"agent":{"command":"agent-server"}}}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,9 +143,14 @@ func TestMergeRuntimeAndAgentMcpConfigClaudeCombinesAndAgentWins(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	merged, err := mergeRuntimeAndAgentMcpConfig("claude", json.RawMessage(`{"mcpServers":{"shared":{"command":"agent-shared"},"agent-only":{"url":"https://agent.example/mcp"}}}`))
+	allow := parseRuntimeMcpAllowList("runtime-only, shared,paper")
+	merged, passed, err := mergeRuntimeAndAgentMcpConfig("claude", json.RawMessage(`{"mcpServers":{"shared":{"command":"agent-shared"},"agent-only":{"url":"https://agent.example/mcp"}}}`), allow)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// "shared" is the agent's own entry, so only two runtime servers were passed on.
+	if strings.Join(passed, ",") != "paper,runtime-only" {
+		t.Fatalf("passed = %v", passed)
 	}
 	var document struct {
 		McpServers map[string]map[string]any `json:"mcpServers"`
@@ -189,7 +195,7 @@ args = ["mcp-server-fetch"]
 		t.Fatal(err)
 	}
 
-	merged, err := mergeRuntimeAndAgentMcpConfig("codex", json.RawMessage(`{"mcpServers":{"agent":{"command":"node","args":["agent.js"]}}}`))
+	merged, _, err := mergeRuntimeAndAgentMcpConfig("codex", json.RawMessage(`{"mcpServers":{"agent":{"command":"node","args":["agent.js"]}}}`), parseRuntimeMcpAllowList("docs,fetch"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,10 +217,12 @@ args = ["mcp-server-fetch"]
 	}
 }
 
+// Providers outside strictMcpProviders keep native inheritance for a nil/null
+// agent config: the daemon cannot lock them, so it does not pretend to.
 func TestMergeRuntimeAndAgentMcpConfigNullKeepsNativeInheritance(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage(" null ")} {
-		merged, err := mergeRuntimeAndAgentMcpConfig("claude", raw)
+		merged, _, err := mergeRuntimeAndAgentMcpConfig("opencode", raw, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +251,7 @@ func TestCodeArtsMcpConfigLoadsJSONCAndAgentWins(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	merged, err := mergeRuntimeAndAgentMcpConfig("codearts", json.RawMessage(`{"mcp":{"shared":{"command":"agent-shared"},"agent-only":{"command":"agent-cmd"}}}`))
+	merged, _, err := mergeRuntimeAndAgentMcpConfig("codearts", json.RawMessage(`{"mcp":{"shared":{"command":"agent-shared"},"agent-only":{"command":"agent-cmd"}}}`), parseRuntimeMcpAllowList("runtime-only,shared"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +402,7 @@ func TestMergeRuntimeAndAgentMcpConfigCodebuddyIsPassthrough(t *testing.T) {
 	}
 
 	agentConfig := json.RawMessage(`{"mcpServers":{"agent-only":{"command":"agent-cmd"}}}`)
-	merged, err := mergeRuntimeAndAgentMcpConfig("codebuddy", agentConfig)
+	merged, _, err := mergeRuntimeAndAgentMcpConfig("codebuddy", agentConfig, parseRuntimeMcpAllowList("local-only"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +574,7 @@ func TestMergeRuntimeAndAgentMcpConfigKimiIsPassthrough(t *testing.T) {
 	}
 
 	agentConfig := json.RawMessage(`{"mcpServers":{"agent-only":{"command":"agent-cmd"}}}`)
-	merged, err := mergeRuntimeAndAgentMcpConfig("kimi", agentConfig)
+	merged, _, err := mergeRuntimeAndAgentMcpConfig("kimi", agentConfig, parseRuntimeMcpAllowList("paper"))
 	if err != nil {
 		t.Fatal(err)
 	}

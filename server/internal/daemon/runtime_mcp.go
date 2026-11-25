@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,59 +24,146 @@ type runtimeLocalMcpServerSummary struct {
 	Enabled   bool   `json:"enabled"`
 }
 
-// mergeRuntimeAndAgentMcpConfig builds the task-local MCP configuration used
-// when an agent has MCP servers managed by Multica. Runtime servers are the
-// base layer and the agent's entries win on a same-name collision. The merge
-// happens inside the local daemon so runtime URLs, headers, commands, and env
-// values never need to leave the machine.
+// runtimeMcpAllowEnv names the daemon environment variable that opts runtime
+// MCP servers into agent tasks: a comma-separated list of server names from
+// the runtime user's own CLI configuration (e.g. `~/.claude.json`). Unset or
+// empty means none. Those servers carry the user's personal credentials, so
+// an agent that is not a workspace member must never receive one by default.
+const runtimeMcpAllowEnv = "MULTICA_RUNTIME_MCP_ALLOW"
+
+// strictMcpProviders are the providers whose launch path treats a managed MCP
+// config as the complete set: Claude via --strict-mcp-config, Codex by
+// stripping inherited `[mcp_servers.*]` tables from the per-task config.toml.
+// For these the daemon always hands over a managed config (an empty one when
+// the agent has none), so servers from the user's configuration are never
+// inherited natively. Other providers either merge the user's configuration
+// inside the CLI regardless (OpenCode, CodeArts, CodeBuddy, Kimi, the ACP
+// runtimes) or would change launch behaviour for a managed config (Cursor
+// writes a project .mcp.json); they keep their native path when the agent has
+// no mcp_config.
+var strictMcpProviders = map[string]bool{
+	"claude": true,
+	"codex":  true,
+}
+
+// parseRuntimeMcpAllowList parses the MULTICA_RUNTIME_MCP_ALLOW value.
+func parseRuntimeMcpAllowList(value string) map[string]bool {
+	allow := map[string]bool{}
+	for _, name := range strings.Split(value, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			allow[name] = true
+		}
+	}
+	return allow
+}
+
+// mergeRuntimeAndAgentMcpConfig builds the task-local MCP configuration. The
+// agent's own servers (managed by Multica) are the base; a runtime server from
+// the user's CLI configuration joins only when its name is in allow, and the
+// agent's entry wins on a same-name collision. The merge happens inside the
+// local daemon so runtime URLs, headers, commands, and env values never need
+// to leave the machine. It also returns the names of the runtime servers that
+// were passed on, for logging; never log anything but those names.
 //
-// A nil/null agent config keeps the provider's native inheritance path intact.
-// A present config (including an empty mcpServers map) opts into the merged,
-// task-local config so adding one managed server no longer disables unrelated
-// runtime servers.
-func mergeRuntimeAndAgentMcpConfig(provider string, agentConfig json.RawMessage) (json.RawMessage, error) {
+// For strictMcpProviders the result is always a managed config, so a nil/null
+// agent config becomes an empty mcpServers map rather than native
+// inheritance. For other providers a nil/null agent config is returned
+// unchanged.
+func mergeRuntimeAndAgentMcpConfig(provider string, agentConfig json.RawMessage, allow map[string]bool) (json.RawMessage, []string, error) {
 	trimmed := bytes.TrimSpace(agentConfig)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return agentConfig, nil
+	managed := len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+	strict := strictMcpProviders[provider]
+	if !managed && !strict {
+		return agentConfig, nil, nil
 	}
 
-	runtimeServers, supported, err := loadRuntimeMcpServerConfigs(provider)
-	if err != nil {
-		return nil, err
+	// The user's configuration is only read here to pick out allowed names;
+	// a parse error in it matters only when something was allowed.
+	configured, supported, loadErr := loadRuntimeMcpServerConfigs(provider)
+	if !supported && !strict {
+		// Providers the daemon never merged for keep the agent's config
+		// byte-for-byte.
+		return agentConfig, nil, nil
 	}
-	if !supported {
-		return agentConfig, nil
+	runtimeServers := map[string]any{}
+	if len(allow) > 0 {
+		if loadErr != nil {
+			return nil, nil, loadErr
+		}
+		for name, entry := range configured {
+			if allow[name] {
+				runtimeServers[name] = entry
+			}
+		}
 	}
 
-	var agentDocument map[string]any
-	if err := json.Unmarshal(trimmed, &agentDocument); err != nil {
-		return nil, fmt.Errorf("parse agent MCP config: %w", err)
-	}
 	agentServers := map[string]any{}
-	if servers, ok := nestedRuntimeMcpMap(agentDocument, "mcpServers"); ok {
-		agentServers = servers
-	} else if provider == "opencode" || provider == "codearts" {
-		// Older OpenCode agents may store the provider-native top-level `mcp`
-		// map. Its individual entries can still flow through the existing
-		// OpenCode adapter when placed under the canonical mcpServers envelope.
-		if servers, ok := nestedRuntimeMcpMap(agentDocument, "mcp"); ok {
+	if managed {
+		var agentDocument map[string]any
+		if err := json.Unmarshal(trimmed, &agentDocument); err != nil {
+			return nil, nil, fmt.Errorf("parse agent MCP config: %w", err)
+		}
+		if servers, ok := nestedRuntimeMcpMap(agentDocument, "mcpServers"); ok {
 			agentServers = servers
+		} else if provider == "opencode" || provider == "codearts" {
+			// Older OpenCode agents may store the provider-native top-level `mcp`
+			// map. Its individual entries can still flow through the existing
+			// OpenCode adapter when placed under the canonical mcpServers envelope.
+			if servers, ok := nestedRuntimeMcpMap(agentDocument, "mcp"); ok {
+				agentServers = servers
+			}
 		}
 	}
 
 	merged := make(map[string]any, len(runtimeServers)+len(agentServers))
+	passed := make([]string, 0, len(runtimeServers))
 	for name, entry := range runtimeServers {
+		if _, overridden := agentServers[name]; overridden {
+			continue
+		}
 		merged[name] = entry
+		passed = append(passed, name)
 	}
 	for name, entry := range agentServers {
 		merged[name] = entry
 	}
+	sort.Strings(passed)
 
 	raw, err := json.Marshal(map[string]any{"mcpServers": merged})
 	if err != nil {
-		return nil, fmt.Errorf("marshal merged MCP config: %w", err)
+		return nil, nil, fmt.Errorf("marshal merged MCP config: %w", err)
 	}
-	return raw, nil
+	return raw, passed, nil
+}
+
+// resolveTaskMcpConfig returns the MCP config a task launches with. It fails
+// closed: when the runtime merge errors, the task gets the agent's own servers
+// only, and for strictMcpProviders never falls back to native inheritance of
+// the user's configuration.
+func resolveTaskMcpConfig(provider string, agentConfig json.RawMessage, allowValue string, logger *slog.Logger) json.RawMessage {
+	merged, passed, err := mergeRuntimeAndAgentMcpConfig(provider, agentConfig, parseRuntimeMcpAllowList(allowValue))
+	if err != nil {
+		logger.Warn("mcp_config: runtime merge failed; using agent configuration only",
+			"provider", provider,
+			"error", err,
+		)
+		// Without an allow list nothing is read from the user's configuration,
+		// so this only fails on a malformed agent config, which is then passed
+		// through as before.
+		if merged, _, err = mergeRuntimeAndAgentMcpConfig(provider, agentConfig, nil); err != nil {
+			return agentConfig
+		}
+		return merged
+	}
+	if len(passed) > 0 {
+		// Names only: entries carry URLs, headers, and env values.
+		logger.Info("mcp_config: passing runtime MCP servers to agent",
+			"provider", provider,
+			"servers", passed,
+			"allow_env", runtimeMcpAllowEnv,
+		)
+	}
+	return merged
 }
 
 // codeArtsUserConfigPath returns the first CodeArts user config file present,

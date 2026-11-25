@@ -68,9 +68,9 @@ func buildCodebuddyArgs(opts ExecOptions, logger *slog.Logger) []string {
 	//	--mcp-config + strict ... managed only
 	//	strict only ............. nothing at all
 	//
-	// The union is also what mergeRuntimeAndAgentMcpConfig promises: adding
-	// one managed server must not disable the user's own. CodeBuddy applies
-	// it natively, and a managed entry already wins a same-name collision
+	// CodeBuddy is therefore not one of the daemon's strictMcpProviders: the
+	// user's own servers stay visible to its agents (CLI_AND_DAEMON.md,
+	// "Runtime MCP servers"). A managed entry wins a same-name collision
 	// (verified), so the daemon does not pre-merge — see the codebuddy note
 	// in loadRuntimeMcpServerConfigs.
 	if opts.Model != "" {
